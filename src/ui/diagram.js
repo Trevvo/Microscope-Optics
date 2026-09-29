@@ -9,14 +9,30 @@ import { integrate, LAMBDA, N } from '../physics/grid.js';
 import { xRange } from './plots.js';
 
 // Layout is sized for laptop screens: a ~1.8:1 drawing that scales up to fill the stage.
-export const VIEW = { w: 1320, h: 752 };
+// The drawing is VIEW_H tall; its width follows the stage's aspect ratio (≥ BASE_W) so it
+// fills the screen edge to edge. Right-hand parts (SpectraX) are anchored to the right
+// border; any extra width goes half to the left column (camera graphs) and half to the
+// centre block's shift, which also widens the excitation panel.
+const BASE_W = 1320;
+const VIEW_H = 752;
 const LED_Y0 = 92;
 const LED_DY = 110;
 const STAGE_Y = 270; // top of the microscope stage
-const CX = 630; // optical axis (cell, objective, cube dichroic, emitter)
 const CELL_SCALE = 1.1;
-const EX_PANEL = { x: 836, y: 36, w: 246, h: 262 }; // between the SpectraX top and the cell
-const CAM_PANEL = { B: { x: 14, y: 90, w: 400, ph: 140 }, A: { x: 14, y: 370, w: 264, ph: 116 } };
+
+function layout(W) {
+  const R = W - BASE_W; // offset for right-anchored parts
+  const s = Math.round(Math.max(0, R) * 0.5); // centre-block shift = extra left-column width
+  const cam = { x: 8, w: 372 + s, h: 244, ph: 116 }; // two identical, stacked camera graphs
+  return {
+    W, R, s,
+    CX: 630 + s, // optical axis (cell, objective, cube dichroic, emitter)
+    EX: { x: 836 + s, y: 36, w: 250 + R - s, h: 262 }, // between the SpectraX top and the cell
+    CAM: { B: { ...cam, y: 44 }, A: { ...cam, y: 296 } },
+  };
+}
+let L = layout(BASE_W);
+let CX = L.CX;
 const CAM_NAME = { A: 'Camera 1', B: 'Camera 2' };
 
 /** Slot definitions: id, position, title, picker categories, and doc accessors. */
@@ -24,19 +40,19 @@ export function slots(doc) {
   const list = doc.leds.flatMap((l, i) => {
     const y = LED_Y0 + i * LED_DY;
     return [
-      { id: `led:${l.key}`, x: 1226, y, r: 23, title: `${l.label} LED`, kind: 'led', cats: 'L', get: (d) => d.leds[i].spectrumId, set: (d, v) => (d.leds[i].spectrumId = v), ledKey: l.key },
-      { id: `paddle:${l.key}`, x: 1140, y, r: 20, title: `${l.label} paddle filter`, kind: 'filter', cats: 'filter', get: (d) => d.leds[i].paddleId, set: (d, v) => (d.leds[i].paddleId = v), ledKey: l.key },
+      { id: `led:${l.key}`, x: 1230 + L.R, y, r: 23, title: `${l.label} LED`, kind: 'led', cats: 'L', get: (d) => d.leds[i].spectrumId, set: (d, v) => (d.leds[i].spectrumId = v), ledKey: l.key },
+      { id: `paddle:${l.key}`, x: 1144 + L.R, y, r: 20, title: `${l.label} paddle filter`, kind: 'filter', cats: 'filter', get: (d) => d.leds[i].paddleId, set: (d, v) => (d.leds[i].paddleId = v), ledKey: l.key },
     ];
   });
   return list.concat([
-    { id: 'exciter', x: 820, y: 440, title: 'Cube exciter', kind: 'filter', cats: 'filter', get: (d) => d.cube.exciterId, set: (d, v) => (d.cube.exciterId = v) },
-    { id: 'cubeDichroic', x: 630, y: 440, title: 'Cube dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.cube.dichroicId, set: (d, v) => (d.cube.dichroicId = v) },
-    { id: 'emitter', x: 630, y: 580, title: 'Cube emitter', kind: 'filter', cats: 'filter', get: (d) => d.cube.emitterId, set: (d, v) => (d.cube.emitterId = v) },
-    { id: 'gemini', x: 480, y: 675, title: 'Gemini dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.splitter.dichroicId, set: (d, v) => (d.splitter.dichroicId = v) },
-    { id: 'armA', x: 345, y: 675, title: 'Arm 1 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armA.filterId, set: (d, v) => (d.splitter.armA.filterId = v) },
-    { id: 'camA', x: 95, y: 675, r: 34, face: 'right', title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
-    { id: 'armB', x: 480, y: 545, title: 'Arm 2 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armB.filterId, set: (d, v) => (d.splitter.armB.filterId = v) },
-    { id: 'camB', x: 480, y: 402, r: 34, face: 'down', title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
+    { id: 'exciter', x: 820 + L.s, y: 440, title: 'Cube exciter', kind: 'filter', cats: 'filter', get: (d) => d.cube.exciterId, set: (d, v) => (d.cube.exciterId = v) },
+    { id: 'cubeDichroic', x: L.CX, y: 440, title: 'Cube dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.cube.dichroicId, set: (d, v) => (d.cube.dichroicId = v) },
+    { id: 'emitter', x: L.CX, y: 580, title: 'Cube emitter', kind: 'filter', cats: 'filter', get: (d) => d.cube.emitterId, set: (d, v) => (d.cube.emitterId = v) },
+    { id: 'gemini', x: 440 + L.s, y: 675, title: 'Gemini dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.splitter.dichroicId, set: (d, v) => (d.splitter.dichroicId = v) },
+    { id: 'armA', x: 300 + L.s, y: 675, title: 'Arm 1 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armA.filterId, set: (d, v) => (d.splitter.armA.filterId = v) },
+    { id: 'camA', x: 80, y: 675, r: 34, face: 'right', title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
+    { id: 'armB', x: 440 + L.s, y: 590, title: 'Arm 2 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armB.filterId, set: (d, v) => (d.splitter.armB.filterId = v) },
+    { id: 'camB', x: 440 + L.s, y: 458, r: 34, face: 'down', title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
   ]);
 }
 
@@ -191,7 +207,7 @@ function exPanel(x, y, w, h, ctx) {
 /** Light reaching a camera (after every filter and its QE), one translucent area per
  *  fluorophore plus the total, with each fluorophore's share of the signal. Minimisable. */
 function camPanel(cam, ctx, store) {
-  const { x, y, w, ph } = CAM_PANEL[cam];
+  const { x, y, w, ph, h } = L.CAM[cam];
   const r = ctx.result;
   const acq = ctx.acq;
   const slotId = cam === 'A' ? 'camA' : 'camB';
@@ -263,12 +279,10 @@ function camPanel(cam, ctx, store) {
   const nCols = w < 300 && segs.length <= 2 ? 1 : 2;
   const colW = pw / nCols;
   const maxChars = Math.max(6, Math.floor((colW - 50) / 6.2));
-  const legend = segs.slice(0, 6).map((q, i) => `<g transform="translate(${px + (i % nCols) * colW},${barY + 30 + Math.floor(i / nCols) * 18})">
+  const legend = segs.slice(0, 4).map((q, i) => `<g transform="translate(${px + (i % nCols) * colW},${barY + 30 + Math.floor(i / nCols) * 18})">
       <circle cx="5" cy="-5" r="5" fill="${ctx.colors[q.f.key]}"/>
       <text x="15" y="0" class="t-row">${esc(short(q.f.name, maxChars))}</text>
       <text x="${colW - 10}" y="0" class="t-row-v" text-anchor="end">${fmt1(q.v)}%</text></g>`).join('');
-  const rows = Math.max(1, Math.ceil(Math.min(6, segs.length) / nCols));
-  const h = 50 + ph + 24 + 12 + 14 + rows * 18;
   const empty = ci < 0 ? 'no light reaches this camera (Gemini bypass)' : !r?.fluors.length ? 'no fluorophores in the sample' : !peak ? 'no signal' : '';
   return `${head}
     <g class="expanel campanel">
@@ -311,6 +325,9 @@ function cubeButton(cx, cy, current) {
 // ------------------------------------------------------------------ main render
 
 export function renderDiagram(el, ctx, handlers) {
+  const box = el.getBoundingClientRect();
+  L = layout(box.height > 0 ? Math.max(BASE_W, Math.round((VIEW_H * box.width) / box.height)) : BASE_W);
+  CX = L.CX;
   const { doc, store, acq, acqDoc } = ctx;
   const steps = Object.fromEntries((acq?.steps ?? []).map((s) => [s.id, s]));
   const S = slots(doc);
@@ -331,7 +348,7 @@ export function renderDiagram(el, ctx, handlers) {
     return `<path d="${d}" class="beam ${cls}" stroke="${col}" stroke-opacity="${op.toFixed(2)}" ${rel > 0.02 ? 'filter="url(#beamglow)"' : ''}/>${hit}`;
   };
   const beams = [];
-  const JX = 1080, JY = 430; // light-guide junction
+  const JX = 1084 + L.R, JY = 430; // light-guide junction
   doc.leds.forEach((l) => {
     const led = pos[`led:${l.key}`];
     const p = pos[`paddle:${l.key}`];
@@ -417,8 +434,8 @@ export function renderDiagram(el, ctx, handlers) {
     const c = centroid(store.get(l.spectrumId));
     return `<g class="toggle ${on ? 'on' : ''} ${l.spectrumId ? '' : 'disabled'}" data-led="${l.key}" role="switch" aria-checked="${!!on}" tabindex="0" aria-label="${esc(l.label)} LED on/off">
       <title>${esc(l.label)} LED ${on ? 'on' : 'off'} in this acquisition — click to toggle</title>
-      <rect x="1266" y="${y - 11}" width="40" height="22" rx="11" style="${on && c ? `fill:${wavelengthCSS(c)}` : ''}"/>
-      <circle cx="${on ? 1295 : 1277}" cy="${y}" r="8"/></g>`;
+      <rect x="${1270 + L.R}" y="${y - 11}" width="40" height="22" rx="11" style="${on && c ? `fill:${wavelengthCSS(c)}` : ''}"/>
+      <circle cx="${(on ? 1299 : 1281) + L.R}" cy="${y}" r="8"/></g>`;
   }).join('');
 
   // cell glow ∝ how strongly each fluorophore is excited in this acquisition
@@ -427,21 +444,21 @@ export function renderDiagram(el, ctx, handlers) {
   const enabled = doc.fluors.filter((f) => f.enabled);
   const names = enabled.map((f) => store.fluors.get(f.key)?.name ?? f.key);
 
-  el.innerHTML = `<svg viewBox="0 0 ${VIEW.w} ${VIEW.h}" class="diagram" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Light path">
+  el.innerHTML = `<svg viewBox="0 0 ${L.W} ${VIEW_H}" class="diagram" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Light path">
     <defs>
-      <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="${VIEW.w}" height="${VIEW.h}"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-      <filter id="beamglow" filterUnits="userSpaceOnUse" x="0" y="0" width="${VIEW.w}" height="${VIEW.h}"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="${L.W}" height="${VIEW_H}"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <filter id="beamglow" filterUnits="userSpaceOnUse" x="0" y="0" width="${L.W}" height="${VIEW_H}"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
       <linearGradient id="stageGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#5a6470"/><stop offset="1" stop-color="#2c333b"/></linearGradient>
       <linearGradient id="cytoGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#a9d3e0" stop-opacity="0.42"/><stop offset="1" stop-color="#6f9fb2" stop-opacity="0.26"/></linearGradient>
       <radialGradient id="nucGrad" cx="0.42" cy="0.38" r="0.7"><stop offset="0" stop-color="#8f86e0" stop-opacity="0.7"/><stop offset="1" stop-color="#5a4fb5" stop-opacity="0.55"/></radialGradient>
     </defs>
-    <rect x="1096" y="30" width="218" height="${LED_DY * (doc.leds.length - 1) + 110}" rx="14" class="box"/>
-    <text x="1108" y="22" class="t-box">SPECTRA X</text>
-    <rect x="550" y="388" width="350" height="262" rx="14" class="box"/>
-    <text x="890" y="380" class="t-box" text-anchor="end">Filter cube</text>
-    ${cubeButton(846, 588, ctx.cubePreset)}
-    <rect x="290" y="495" width="252" height="250" rx="14" class="box"/>
-    <text x="302" y="517" class="t-box">Gemini splitter</text>
+    <rect x="${1098 + L.R}" y="30" width="219" height="${LED_DY * (doc.leds.length - 1) + 110}" rx="14" class="box"/>
+    <text x="${1110 + L.R}" y="22" class="t-box">SPECTRA X</text>
+    <rect x="${550 + L.s}" y="388" width="350" height="262" rx="14" class="box"/>
+    <text x="${890 + L.s}" y="380" class="t-box" text-anchor="end">Filter cube</text>
+    ${cubeButton(846 + L.s, 588, ctx.cubePreset)}
+    <rect x="${250 + L.s}" y="545" width="252" height="205" rx="14" class="box"/>
+    <text x="${262 + L.s}" y="567" class="t-box">Gemini splitter</text>
     <path d="M${CX - 46},${STAGE_Y + 22} H${CX + 46} L${CX + 30},${STAGE_Y + 78} H${CX - 30} Z" class="objective"/>
     <text x="${CX + 58}" y="${STAGE_Y + 56}" class="t-box">Objective</text>
     ${beams.join('')}
@@ -453,12 +470,12 @@ export function renderDiagram(el, ctx, handlers) {
       ${cell(CX, STAGE_Y, enabled, ctx.fluorColors, glow)}
       <text x="${CX}" y="${STAGE_Y - 96}" class="t-title t-sample" text-anchor="middle">${names.length ? esc(names.slice(0, 4).join(' · ')) + (names.length > 4 ? ` +${names.length - 4}` : '') : 'Sample — click to add fluorophores'}</text>
     </g>
-    ${exPanel(EX_PANEL.x, EX_PANEL.y, EX_PANEL.w, EX_PANEL.h, { acq, store, doc, colors: ctx.fluorColors, exMin: ctx.exMin })}
+    ${exPanel(L.EX.x, L.EX.y, L.EX.w, L.EX.h, { acq, store, doc, colors: ctx.fluorColors, exMin: ctx.exMin })}
     ${nodes}
     ${toggles}
     ${camPanel('B', ctx, store)}
     ${camPanel('A', ctx, store)}
-    ${!hasSplit ? `<g class="bypass" data-bypass="1" role="button" tabindex="0"><text x="416" y="749" class="t-sub" text-anchor="middle">No Gemini dichroic → bypass to ${CAM_NAME[bypass]} (click to switch)</text></g>` : ''}
+    ${!hasSplit ? `<g class="bypass" data-bypass="1" role="button" tabindex="0"><text x="${375 + L.s}" y="749" class="t-sub" text-anchor="middle">No Gemini dichroic → bypass to ${CAM_NAME[bypass]} (click to switch)</text></g>` : ''}
   </svg>`;
 
   const act = (sel, fn) => el.querySelectorAll(sel).forEach((g) => {

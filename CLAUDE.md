@@ -33,7 +33,7 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
   - Incoming snapshots while dirty are merged live the same way.
   - Plain whole-document `setDoc` saves lost edits in a race. **Don't go back to it.**
 - **UI modules:**
-  - `ui/diagram.js`: SVG with `viewBox` 1400×915. `slots()` defines every clickable slot (id, x/y, `cats`, get/set). `exPanel` is the excitation plot, drawn in SVG. It also draws the cell, the camera readouts, and the cube button.
+  - `ui/diagram.js`: SVG with `viewBox` 1320×752, laid out to fill a laptop-shaped stage (upper left: excitation panel; right edge, full height: SpectraX). Layout constants (`VIEW`, `LED_Y0/DY`, `STAGE_Y`, `CX`, `CELL_SCALE`) are at the top; slot positions are in `slots()`. Keep label text at 12.5 px or larger. `slots()` defines every clickable slot (id, x/y, `cats`, get/set). `exPanel` is the excitation plot, drawn in SVG. It also draws the cell, the camera readouts, and the cube button.
   - `ui/picker.js`: the part picker with columns pref / all / ours. `accepts()` enforces slot typing: filter slots take `F` with `sub != BS`, dichroic slots take only `BS`.
   - `ui/cubeMenu.js`: the presets menu.
   - `ui/fluorPopover.js`

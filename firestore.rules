@@ -1,0 +1,66 @@
+rules_version = '2';
+
+// Everything requires a signed-in user. Accounts are created by hand in the
+// Firebase console (self sign-up disabled), so "signed in" == "lab member".
+// Documents are never deleted: configs are archived, revisions and custom
+// spectra are append-only, so vandalism can always be undone from history.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function validConfig(d) {
+      return d.keys().hasOnly(['name', 'description', 'schemaVersion', 'archived', 'leds', 'cube', 'splitter',
+                               'fluors', 'acquisitions', 'updatedAt', 'updatedBy', 'updatedSession'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 120
+        && d.description is string && d.description.size() <= 2000
+        && d.schemaVersion is int
+        && d.archived is bool
+        && d.leds is list && d.leds.size() <= 12
+        && d.cube is map
+        && d.splitter is map
+        && d.fluors is list && d.fluors.size() <= 40
+        && d.acquisitions is list && d.acquisitions.size() >= 1 && d.acquisitions.size() <= 16
+        && d.updatedAt == request.time
+        && d.updatedBy is string && d.updatedBy.size() <= 100;
+    }
+
+    match /configs/{configId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && validConfig(request.resource.data);
+      allow delete: if false;
+
+      match /revisions/{revId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['snapshot', 'label', 'savedBy', 'savedAt'])
+          && request.resource.data.snapshot is map
+          && request.resource.data.label is string && request.resource.data.label.size() <= 200
+          && request.resource.data.savedAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    // The lab's "our filters" list: one shared document of spectrum IDs.
+    match /settings/inventory {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && request.resource.data.keys().hasOnly(['ids', 'updatedBy', 'updatedAt'])
+        && request.resource.data.ids is list && request.resource.data.ids.size() <= 1000
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /customSpectra/{specId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['name', 'cat', 'sub', 'data', 'createdBy', 'createdAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+        && request.resource.data.cat in ['L', 'F', 'C']
+        && request.resource.data.data is list && request.resource.data.data.size() == 701
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

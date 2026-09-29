@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Light-path simulator</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%2300e5a0'/><circle cx='16' cy='16' r='6' fill='%23000'/></svg>">
+</head>
+<body>
+  <div id="login" hidden>
+    <form class="login-card">
+      <h1>Light-path simulator</h1>
+      <label>Username <input name="u" autocomplete="username" required autofocus></label>
+      <label>Password <input name="p" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in</button>
+      <p class="err" aria-live="polite"></p>
+    </form>
+  </div>
+
+  <div id="app" hidden>
+    <header id="topbar"></header>
+    <div id="banner" hidden></div>
+    <main id="stage">
+      <div id="diagram"></div>
+    </main>
+    <aside id="details" hidden aria-label="Detailed graphs">
+      <div class="details-head"><h2>Detailed graphs</h2><button class="icon close" aria-label="Close detailed graphs">×</button></div>
+      <div id="readouts"></div>
+      <section class="card"><h3>Warnings</h3><div id="warnings"></div></section>
+      <section id="journey"></section>
+      <details id="assumptions" class="card">
+        <summary>Model & assumptions</summary>
+        <ul>
+          <li><b>Excitation:</b> each LED switched on in an acquisition delivers equal integrated optical power; spectra are converted to photon flux (∝ P·λ). Paddle filter → cube exciter → cube dichroic reflection.</li>
+          <li><b>Fluorophores</b> are all treated as equally bright: extinction coefficient and quantum yield are not used. Absorption ∝ ∫ (photon flux at sample × peak-normalised excitation spectrum); emission follows the area-normalised emission spectrum.</li>
+          <li><b>Dichroics</b> are lossless: R = 1 − T. Gemini: transmitted light → Camera 1, reflected → Camera 2.</li>
+          <li><b>Detection</b> = cube dichroic T × cube emitter × Gemini split × arm filter × camera QE. An empty slot passes everything (T = 1); a missing camera counts as QE = 1.</li>
+          <li>1-photon excitation far from saturation; no bleaching, FRET, or environment effects; objective, tube lens and collection NA treated as flat across wavelength.</li>
+          <li><b>Exc. eff.</b> = fraction of LED photons that excite the fluorophore as effectively as photons at its excitation peak. <b>Collected</b> = fraction of emitted photons that are detected.</li>
+          <li><b>Excitation leakage</b> = fraction of excitation photons at the sample that would reach a camera if back-reflected (upper bound).</li>
+          <li>Spectra from an FPbase snapshot, resampled to 300–1000 nm at 1 nm; filters are T = 0 outside their measured range. SPECTRA X LEDs are the unfiltered sources (FPbase "Spectra X23", checked against Lumencor's published unfiltered output); FPbase's older "SpectraX" entries are filtered outputs and are flagged as such.</li>
+        </ul>
+      </details>
+    </aside>
+  </div>
+  <div id="loading">Loading spectra…</div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+scripts/.cache/
+scripts/fetch.log
+.DS_Store
+.firebase/
+*.log

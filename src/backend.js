@@ -1,6 +1,8 @@
 // Storage + auth backends with one interface:
 //   onAuth(cb) signIn(user, pass) signOut()
-//   watchConfigs(cb) watchConfig(id, cb) createConfig(content) saveConfig(id, content)
+//   watchConfigs(cb) watchConfig(id, cb) createConfig(content)
+//   saveConfig(id, content, base) → {saved, merged, conflicts, remote}: atomically merges our
+//     edits (relative to base) into the server's current copy; writes nothing on conflict
 //   addRevision(id, snapshot, label) listRevisions(id)
 //   watchCustomSpectra(cb) addCustomSpectrum({name, cat, sub, data})
 //   watchInventory(cb) saveInventory(ids)   — the lab's "our filters" list (null until first saved)
@@ -8,6 +10,18 @@
 // LocalBackend keeps everything in localStorage (single-browser dev mode).
 
 import { firebaseConfig, USERNAME_DOMAIN } from './firebase-config.js';
+import { merge3, deepEqual } from './merge.js';
+
+// Strip server bookkeeping so documents compare/merge on content only.
+const content = ({ updatedAt, updatedBy, updatedSession, createdAt, createdBy, id, ...rest }) => rest;
+
+/** Merge our edits (relative to `base`) into the server's current copy. */
+function mergeForSave(serverDoc, local, base) {
+  if (!serverDoc) return { merged: local, conflicts: [] };
+  const theirs = content(serverDoc);
+  if (!base || deepEqual(theirs, base)) return { merged: local, conflicts: [], theirs };
+  return { ...merge3(base, local, theirs), theirs };
+}
 
 const sessionId = Math.random().toString(36).slice(2, 10);
 
@@ -78,9 +92,17 @@ class FirebaseBackend {
     return ref.id;
   }
 
-  saveConfig(id, content) {
-    const { doc, setDoc } = this.f;
-    return setDoc(doc(this.db, 'configs', id), { ...content, ...this.stamp() });
+  saveConfig(id, local, base) {
+    const { doc, runTransaction } = this.f;
+    const ref = doc(this.db, 'configs', id);
+    return runTransaction(this.db, async (tx) => {
+      const snap = await tx.get(ref);
+      const server = snap.exists() ? snap.data() : null;
+      const { merged, conflicts, theirs } = mergeForSave(server, local, base);
+      if (conflicts.length) return { saved: false, merged, conflicts, remote: server };
+      tx.set(ref, { ...merged, ...this.stamp() });
+      return { saved: true, merged, conflicts, remote: server, changedByOthers: !!theirs && !deepEqual(merged, local) };
+    });
   }
 
   addRevision(id, snapshot, label = '') {
@@ -215,10 +237,16 @@ class LocalBackend {
     return id;
   }
 
-  async saveConfig(id, content) {
-    this.data.configs[id] = { ...content, ...this.stamp() };
+  async saveConfig(id, local, base) {
+    // re-read storage so another tab's write is merged, as the Firestore transaction does
+    try { this.data = JSON.parse(localStorage.getItem(LS)) ?? this.data; } catch { /* keep in-memory copy */ }
+    const server = this.data.configs[id] ?? null;
+    const { merged, conflicts, theirs } = mergeForSave(server, local, base);
+    if (conflicts.length) return { saved: false, merged, conflicts, remote: server };
+    this.data.configs[id] = { ...merged, ...this.stamp() };
     this.persist();
     this.emit();
+    return { saved: true, merged, conflicts, remote: server, changedByOthers: !!theirs && !deepEqual(merged, local) };
   }
 
   async addRevision(id, snapshot, label = '') {

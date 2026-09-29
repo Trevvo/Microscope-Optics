@@ -25,6 +25,13 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
   - Custom spectra have IDs `c:<id>`.
   - `display(id)` returns `{title: label || name, brand}`.
 - **Main:** `src/main.js` holds all state and the render loop (rAF). Every doc edit goes through `edit()` (re-render) or `editQuiet()` (no re-render, for text inputs). It autosaves after 1.2 s of inactivity, and at least every 5 s.
+- **Concurrent editing** (verified live with two sessions):
+  - `backend.saveConfig(id, local, base)` runs a Firestore **transaction**. It reads the server copy, calls `merge3(base, local, server)` from `src/merge.js`, and writes the merged document, or writes nothing if there's a conflict.
+  - `state.base` is the last synced content; update it on every apply or save.
+  - Merge rules: objects merge key by key; equal-length object arrays (acquisitions, leds, fluors) merge per element; `ledsOn` and scalars are atomic.
+  - On a conflict, `state.conflict` is set, autosave pauses, and the banner offers **Use theirs** / **Keep mine**. Keep mine sets the base to their version, so our values win.
+  - Incoming snapshots while dirty are merged live the same way.
+  - Plain whole-document `setDoc` saves lost edits in a race. **Don't go back to it.**
 - **UI modules:**
   - `ui/diagram.js`: SVG with `viewBox` 1400×915. `slots()` defines every clickable slot (id, x/y, `cats`, get/set). `exPanel` is the excitation plot, drawn in SVG. It also draws the cell, the camera readouts, and the cube button.
   - `ui/picker.js`: the part picker with columns pref / all / ours. `accepts()` enforces slot typing: filter slots take `F` with `sub != BS`, dichroic slots take only `BS`.
@@ -93,5 +100,6 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
   - Each launch gets a fresh profile, so localStorage isn't shared between runs.
   - A hash-only `goto` doesn't reload the page.
   - The `beforeunload` prompt (shown while there are unsaved edits) blocks `browser.close()`, so wait longer than 1.5 s after an edit before closing.
-- The Firestore emulator needs Java, which isn't installed here. **The Firebase path and the rules have never been run against a real project**; the first live login is the real test.
+- The Firestore emulator needs Java, which isn't installed here. To test against the live project, run `npm run dev`; `localhost` is authorized by default in Firebase Auth. Use separate `browser.createBrowserContext()` contexts for multi-user tests, and restore any data you change.
+- **Live deployment:** https://trevvo.github.io/Microscope-Optics/ (GitHub repo `Trevvo/Microscope-Optics`; Firebase project `microscope-optics`). Pushing to `main` redeploys.
 - FPbase's data license was never confirmed (see `public/data/fpbase/ATTRIBUTION.md`).

@@ -3,6 +3,7 @@ import { SpectraStore } from './data/spectraStore.js';
 import { makeBackend } from './backend.js';
 import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig } from './schema.js';
 import { idsToLoad, resolve, warnings } from './resolve.js';
+import { merge3 } from './merge.js';
 import { simulate } from './physics/simulate.js';
 import { complement, dot } from './physics/grid.js';
 import { renderDiagram, slots } from './ui/diagram.js';
@@ -39,6 +40,8 @@ const state = {
   configs: [],
   currentId: null,
   doc: null, // working copy (normalized)
+  base: null, // content of the last version synced with the server (merge base)
+  conflict: null, // remote doc awaiting the user's choice; autosave paused while set
   dirty: false,
   editSeq: 0,
   status: { text: '', cls: '' },
@@ -151,6 +154,8 @@ async function openConfig(id) {
   state.unsub.config?.();
   state.currentId = id;
   state.doc = null;
+  state.base = null;
+  state.conflict = null;
   state.revisions = null;
   state.acqIndex = 0;
   state.menuOpen = false;
@@ -173,11 +178,32 @@ async function openConfig(id) {
     }
     if (fromMe && state.doc) return; // echo of our own write
     if (state.dirty && state.doc) {
-      showBanner(remote);
+      // someone else saved while we have unsaved edits: merge field by field against the last synced version
+      const theirs = contentOf(migrateLeds(normalizeConfig(remote), state.store.index));
+      const { merged, conflicts } = merge3(state.base ?? theirs, contentOf(state.doc), theirs);
+      state.base = theirs;
+      if (!conflicts.length) {
+        state.doc = normalizeConfig(merged);
+        if (state.conflict) {
+          // the clash went away (e.g. they undid it): resume autosave
+          state.conflict = null;
+          hideBanner();
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(save, SAVE_DEBOUNCE_MS);
+        }
+        flash(`Merged ${remote.updatedBy ?? 'someone'}'s changes with yours`);
+        render();
+        return;
+      }
+      clearTimeout(saveTimer); // don't overwrite their change until the user decides
+      state.conflict = remote;
+      showBanner(remote, conflicts);
+      setStatus('Paused — conflicting change', 'bad');
       return;
     }
     const had = !!state.doc;
     state.doc = migrateLeds(normalizeConfig(remote), state.store.index);
+    state.base = contentOf(state.doc);
     state.status = { text: 'Saved', cls: 'ok' };
     if (!fromMe && had) flash(`Updated by ${remote.updatedBy ?? 'someone'}`);
     render();
@@ -211,6 +237,7 @@ function markDirty() {
   if (!state.dirty) dirtySince = Date.now();
   state.dirty = true;
   state.editSeq++;
+  if (state.conflict) return; // autosave paused until the banner is resolved
   setStatus('Unsaved…', 'pending');
   clearTimeout(saveTimer);
   const wait = Math.max(0, Math.min(SAVE_DEBOUNCE_MS, dirtySince + SAVE_MAX_WAIT_MS - Date.now()));
@@ -221,13 +248,27 @@ let saveTimer;
 let dirtySince = 0;
 async function save() {
   clearTimeout(saveTimer);
-  if (!state.doc || !state.dirty) return;
+  if (!state.doc || !state.dirty || state.conflict) return;
   const seq = state.editSeq;
   const id = state.currentId;
   const content = contentOf(state.doc);
   setStatus('Saving…', 'pending');
   try {
-    await state.backend.saveConfig(id, content);
+    const res = await state.backend.saveConfig(id, content, state.base);
+    if (!res.saved) {
+      // someone changed the same field since we last synced: write nothing, ask the user
+      state.conflict = res.remote;
+      showBanner(res.remote, res.conflicts);
+      setStatus('Paused — conflicting change', 'bad');
+      return;
+    }
+    state.base = contentOf(res.merged);
+    if (res.changedByOthers) {
+      // the server copy had other people's edits; fold them into what's on screen
+      state.doc = normalizeConfig(seq === state.editSeq ? res.merged : merge3(content, contentOf(state.doc), res.merged).merged);
+      flash(`Merged ${res.remote?.updatedBy ?? 'someone'}'s changes with yours`);
+      render();
+    }
     if (seq === state.editSeq) state.dirty = false;
     else dirtySince = Date.now();
     setStatus(`Saved ✓ ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 'ok');
@@ -250,19 +291,29 @@ window.addEventListener('beforeunload', (e) => {
   if (state.dirty) { save(); e.preventDefault(); }
 });
 
-function showBanner(remote) {
+function showBanner(remote, conflicts = []) {
   const b = $('#banner');
   b.hidden = false;
-  b.innerHTML = `<b>${remote.updatedBy ?? 'Someone'}</b> changed this config while you were editing.
-    <button data-theirs>Load theirs</button> <button data-mine>Keep mine (overwrite)</button>`;
+  const what = conflicts.map((c) => c.split(/[.[]/)[0]).filter((v, i, a) => a.indexOf(v) === i).join(', ');
+  b.innerHTML = `<b>${remote.updatedBy ?? 'Someone'}</b> changed the same thing you're editing${what ? ` (${what})` : ''}. Autosave is paused.
+    <button data-theirs>Use theirs</button> <button data-mine>Keep mine</button>`;
   b.querySelector('[data-theirs]').onclick = () => {
     state.doc = migrateLeds(normalizeConfig(remote), state.store.index);
+    state.base = contentOf(state.doc);
+    state.conflict = null;
     state.dirty = false;
     clearTimeout(saveTimer);
     hideBanner();
+    setStatus('Saved', 'ok');
     render();
   };
-  b.querySelector('[data-mine]').onclick = () => { hideBanner(); save(); };
+  b.querySelector('[data-mine]').onclick = () => {
+    // treat their version as the base so our values win where we changed things
+    state.base = contentOf(migrateLeds(normalizeConfig(remote), state.store.index));
+    state.conflict = null;
+    hideBanner();
+    save();
+  };
 }
 function hideBanner() { $('#banner').hidden = true; }
 

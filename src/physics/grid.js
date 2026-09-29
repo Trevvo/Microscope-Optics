@@ -55,6 +55,16 @@ export function normalizeArea(a) {
   return s > 0 ? scale(a, 1 / s) : zeros();
 }
 
+/** Excitation spectra are scaled by their maximum within this band, so strong UV/sub-360 nm
+ *  absorption (e.g. propidium iodide) doesn't shrink the visible band. Values may exceed 1 outside it. */
+export const EX_NORM_RANGE = [360, 700];
+
+export function normalizePeakInRange(a, lo = EX_NORM_RANGE[0], hi = EX_NORM_RANGE[1]) {
+  let m = 0;
+  for (let i = Math.max(0, lo - LMIN); i <= Math.min(N - 1, hi - LMIN); i++) if (a[i] > m) m = a[i];
+  return m > 0 ? scale(a, 1 / m) : zeros();
+}
+
 export function normalizePeak(a) {
   let m = 0;
   for (let i = 0; i < N; i++) if (a[i] > m) m = a[i];

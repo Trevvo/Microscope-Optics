@@ -11,7 +11,7 @@
 // objective/tube lens flat across λ. EC and QY default to 1 (every fluorophore
 // equally bright at its excitation peak) unless the caller supplies them.
 
-import { LAMBDA, N, mul, add, complement, integrate, dot, normalizeArea, normalizePeak, zeros } from './grid.js';
+import { LAMBDA, N, mul, add, complement, integrate, dot, normalizeArea, normalizePeakInRange, zeros } from './grid.js';
 
 const LREF = 500; // photons ∝ P·λ; divide by a reference so numbers stay O(1)
 
@@ -71,7 +71,7 @@ export function simulate(input) {
   // Fluorophore shapes and detection efficiencies do not depend on the acquisition.
   const F = fluors.map((raw) => {
     const f = { ...raw, ec: raw.ec ?? 1, qy: raw.qy ?? 1 };
-    const exN = normalizePeak(f.ex); // EC is quoted at the excitation peak
+    const exN = normalizePeakInRange(f.ex); // scaled by the ex maximum within 360–700 nm
     const emN = normalizeArea(f.em); // per emitted photon
     return {
       ...f,

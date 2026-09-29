@@ -5,7 +5,7 @@ import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig } fr
 import { idsToLoad, resolve, warnings } from './resolve.js';
 import { merge3 } from './merge.js';
 import { simulate } from './physics/simulate.js';
-import { complement, dot } from './physics/grid.js';
+import { complement, dot, normalizePeakInRange, N } from './physics/grid.js';
 import { renderDiagram, slots } from './ui/diagram.js';
 import { openPicker, closePicker } from './ui/picker.js';
 import { openFluorPopover, redrawFluorPopover } from './ui/fluorPopover.js';
@@ -412,8 +412,23 @@ function slotPreview(slotId, arr) {
   };
   const fluorEx = () => state.doc.fluors.filter((f) => f.enabled).map((f) => {
     const m = state.store.fluors.get(f.key);
-    return m && { label: `${m.name} ex`, data: peakNorm(state.store.get(m.ex)), color: state.colors[f.key], dash: true };
+    const ex = state.store.get(m?.ex);
+    return m && ex && { label: `${m.name} ex`, data: normalizePeakInRange(ex), color: state.colors[f.key], dash: true };
   }).filter(Boolean);
+  // emission arriving at a point on the emission path, split by fluorophore, plus their sum
+  const emissionAt = (point) => {
+    const cum = point === 'sample' ? null : state.result?.cumulative?.[point];
+    const parts = (acq?.emittedBy ?? []).map((e) => ({ ...e, s: cum ? e.spectrum.map((v, i) => v * cum[i]) : e.spectrum }));
+    const sum = new Float64Array(N);
+    for (const p of parts) for (let i = 0; i < N; i++) sum[i] += p.s[i];
+    let pk = 0;
+    for (let i = 0; i < N; i++) if (sum[i] > pk) pk = sum[i];
+    if (!(pk > 0)) return [];
+    return [
+      ...parts.map((p) => ({ label: p.name, data: p.s.map((v) => v / pk), color: state.colors[p.key] ?? '#999999', fill: true, width: 1.2 })),
+      ...(parts.length > 1 ? [{ label: 'total emission', data: sum.map((v) => v / pk), color: '#ffffff', width: 1.5 }] : []),
+    ];
+  };
   if (slotId.startsWith('led:')) return [{ label: 'LED', data: peakNorm(arr), color: '#e8ecef', fill: true }, ...fluorEx()];
   if (slotId.startsWith('paddle:')) {
     const led = state.doc.leds.find((l) => `paddle:${l.key}` === slotId);
@@ -423,12 +438,12 @@ function slotPreview(slotId, arr) {
     case 'exciter': return [...generic(st['ex:exciter']?.in), ...fluorEx()];
     case 'cubeDichroic': return [
       { label: 'excitation arriving', data: peakNorm(st['ex:cubeDichroic']?.in), color: '#7986cb', dash: true },
-      { label: 'emission arriving', data: peakNorm(st.sample?.out), color: '#ff9800', fill: true },
+      ...emissionAt('sample'),
       { label: 'T (R = 1 − T)', data: arr, color: '#e8ecef', width: 1.5 },
     ];
     case 'emitter': return generic(st.emitter?.in);
     case 'gemini': return [
-      { label: 'emission arriving', data: peakNorm(st.emitter?.out), color: '#ff9800', fill: true },
+      ...emissionAt('emitter'),
       { label: 'T → Camera 1', data: arr, color: '#8bc34a', width: 1.5 },
       { label: 'R → Camera 2', data: arr ? complement(arr) : null, color: '#ce93d8', dash: true },
     ];

@@ -2,6 +2,7 @@
 // efficiency table, warnings, assumptions, and the step-by-step spectra strip.
 
 import { plotSpectra, peakNorm, xRange } from './plots.js';
+import { normalizePeakInRange } from '../physics/grid.js';
 import { centroid, wavelengthCSS } from './color.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -138,7 +139,7 @@ export function renderJourney(el, ctx) {
     { label: 'Excitation at sample', data: peakNorm(acq.excitation), color: '#e0e0e0', fill: true, width: 2 },
     ...doc.fluors.filter((f) => f.enabled).map((f) => {
       const m = store.fluors.get(f.key);
-      return m && { label: m.name, data: peakNorm(store.get(m.ex)), color: colors[f.key], dash: true };
+      return m && store.get(m.ex) && { label: m.name, data: normalizePeakInRange(store.get(m.ex)), color: colors[f.key], dash: true };
     }).filter(Boolean),
   ];
   plotSpectra(el.querySelector('[data-p="ex"]'), exSeries, { height: 180, legend: true, sync: 'journey' });

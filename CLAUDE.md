@@ -87,6 +87,8 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
 
 ## Decisions the user made (don't silently revert)
 - EC and QY are **not used**: all fluorophores are equally bright at their peak. `simulate` defaults EC and QY to 1.
+- Excitation spectra are normalized by their maximum **within 360–700 nm** (`normalizePeakInRange`, `EX_NORM_RANGE`), both in the model and in every plot. Curves may exceed 1 outside that window; the diagram clips them.
+- Camera graphs show one bar per included fluorophore, giving the fraction of its emitted light that reaches that camera (`result.fluors[i].collection[cam]`). They deliberately do not show a composition split.
 - Equal integrated power per LED. Lumencor's absolute powers are known (about 720/770/600/1680/430/360 mW for U/B/C/G/R/N) but deliberately unused.
 - Layout and style:
   - The page is a single full-screen light path, laid out right to left (LEDs right, cameras left), with a dark theme.

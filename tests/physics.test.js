@@ -139,3 +139,14 @@ describe('per-fluorophore emission decomposition (beam hover)', () => {
     expect(r.fluors[0].qy).toBe(1);
   });
 });
+
+describe('excitation normalisation window', () => {
+  it('scales excitation by its maximum within 360–700 nm, ignoring a stronger UV band', () => {
+    // visible band at 530 nm (height 0.4) plus a UV band at 320 nm (height 1)
+    const ex = Float64Array.from(LAMBDA, (l) => 0.4 * Math.exp(-0.5 * ((l - 530) / 15) ** 2) + Math.exp(-0.5 * ((l - 320) / 8) ** 2));
+    const vis = Float64Array.from(LAMBDA, (l) => Math.exp(-0.5 * ((l - 530) / 15) ** 2));
+    const a = simulate({ leds: [{ key: 'g', label: 'G', spectrum: gauss(530, 10), paddle: null }], fluors: [{ key: 'x', name: 'x', ex, em: gauss(560, 15) }], acquisitions: [{ ledsOn: ['g'] }] });
+    const b = simulate({ leds: [{ key: 'g', label: 'G', spectrum: gauss(530, 10), paddle: null }], fluors: [{ key: 'x', name: 'x', ex: vis, em: gauss(560, 15) }], acquisitions: [{ ledsOn: ['g'] }] });
+    expect(a.fluors[0].exEff[0]).toBeCloseTo(b.fluors[0].exEff[0], 3);
+  });
+});

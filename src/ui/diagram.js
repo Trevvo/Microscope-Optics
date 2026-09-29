@@ -5,7 +5,7 @@
 // data-em="<cumulative key>" so the hover tooltip can decompose them.
 
 import { centroid, passbandCenter, wavelengthCSS } from './color.js';
-import { integrate, LAMBDA, N } from '../physics/grid.js';
+import { integrate, LAMBDA, N, LMIN, EX_NORM_RANGE } from '../physics/grid.js';
 import { xRange } from './plots.js';
 
 // Layout is sized for laptop screens: a ~1.8:1 drawing that scales up to fill the stage.
@@ -20,10 +20,13 @@ const LED_DY = 110;
 const STAGE_Y = 270; // top of the microscope stage
 const CELL_SCALE = 1.1;
 
-function layout(W) {
+function layout(W, nFluors = 2) {
   const R = W - BASE_W; // offset for right-anchored parts
   const s = Math.round(Math.max(0, R) * 0.5); // centre-block shift = extra left-column width
-  const cam = { x: 8, w: 372 + s, h: 244, ph: 116 }; // two identical, stacked camera graphs
+  // two identical, stacked camera graphs; they must end above the Gemini box (y 545)
+  const h = 244;
+  const ph = Math.max(40, Math.min(112, h - 104 - 20 * nFluors));
+  const cam = { x: 8, w: 372 + s, h, ph };
   return {
     W, R, s,
     CX: 630 + s, // optical axis (cell, objective, cube dichroic, emitter)
@@ -50,9 +53,9 @@ export function slots(doc) {
     { id: 'emitter', x: L.CX, y: 580, title: 'Cube emitter', kind: 'filter', cats: 'filter', get: (d) => d.cube.emitterId, set: (d, v) => (d.cube.emitterId = v) },
     { id: 'gemini', x: 440 + L.s, y: 675, title: 'Gemini dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.splitter.dichroicId, set: (d, v) => (d.splitter.dichroicId = v) },
     { id: 'armA', x: 300 + L.s, y: 675, title: 'Arm 1 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armA.filterId, set: (d, v) => (d.splitter.armA.filterId = v) },
-    { id: 'camA', x: 80, y: 675, r: 34, face: 'right', title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
+    { id: 'camA', x: 130 + L.s, y: 675, r: 34, face: 'right', title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
     { id: 'armB', x: 440 + L.s, y: 590, title: 'Arm 2 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armB.filterId, set: (d, v) => (d.splitter.armB.filterId = v) },
-    { id: 'camB', x: 440 + L.s, y: 458, r: 34, face: 'down', title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
+    { id: 'camB', x: 440 + L.s, y: 420, r: 34, face: 'down', title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
   ]);
 }
 
@@ -136,8 +139,15 @@ function exPanel(x, y, w, h, ctx) {
   const sx = (l) => px + ((l - x0) / (x1 - x0)) * pw;
   const sy = (v) => py + ph - v * ph;
   const peak = (arr) => { let m = 0; for (let i = 0; i < N; i++) if (arr[i] > m) m = arr[i]; return m; };
-  const path = (arr, close) => {
-    const m = peak(arr);
+  // fluorophore excitation is scaled by its maximum within 360–700 nm (same as the model);
+  // bands outside that window may rise above the top of the plot (clipped)
+  const exPeak = (arr) => {
+    let m = 0;
+    for (let i = EX_NORM_RANGE[0] - LMIN; i <= EX_NORM_RANGE[1] - LMIN; i++) if (arr[i] > m) m = arr[i];
+    return m;
+  };
+  const path = (arr, close, norm) => {
+    const m = norm ?? peak(arr);
     if (!(m > 0)) return '';
     let d = '';
     for (let i = 0; i < N; i++) {
@@ -168,7 +178,7 @@ function exPanel(x, y, w, h, ctx) {
     if (X < px || X > px + pw) return '';
     const hits = fl.map((o, i) => {
       const ex = store.get(o.m.ex);
-      const v = ex[Math.round(ln.lambda - LAMBDA[0])] / peak(ex);
+      const v = ex[Math.round(ln.lambda - LAMBDA[0])] / exPeak(ex);
       const Y = sy(v);
       return `<circle cx="${X}" cy="${Y}" r="3.5" fill="${colors[o.f.key]}" stroke="#000" stroke-width="1"/>
         <text x="${X + 7}" y="${Y - 5 + (i % 2) * 14}" class="t-hit" fill="${colors[o.f.key]}">${Math.round(v * 100)}%</text>`;
@@ -192,8 +202,11 @@ function exPanel(x, y, w, h, ctx) {
       <rect x="${x}" y="${y + 28}" width="${w}" height="${h - 16 + rows * 18}" class="panel-body"/>
       ${ticks.join('')}
       ${ledFills}
-      ${fl.map((o) => `<path d="${path(store.get(o.m.ex), true)}" fill="${colors[o.f.key]}" fill-opacity="0.12" stroke="none"/>`).join('')}
-      ${fl.map((o) => `<path d="${path(store.get(o.m.ex))}" fill="none" stroke="${colors[o.f.key]}" stroke-opacity="0.85" stroke-width="1.6" stroke-dasharray="5 3"/>`).join('')}
+      <clipPath id="exclip"><rect x="${px - 2}" y="${y + 30}" width="${pw + 4}" height="${py + ph - y - 30}"/></clipPath>
+      <g clip-path="url(#exclip)">
+      ${fl.map((o) => { const ex = store.get(o.m.ex); return `<path d="${path(ex, true, exPeak(ex))}" fill="${colors[o.f.key]}" fill-opacity="0.12" stroke="none"/>`; }).join('')}
+      ${fl.map((o) => { const ex = store.get(o.m.ex); return `<path d="${path(ex, false, exPeak(ex))}" fill="none" stroke="${colors[o.f.key]}" stroke-opacity="0.85" stroke-width="1.6" stroke-dasharray="5 3"/>`; }).join('')}
+      </g>
       ${lines}
       ${!fl.length ? `<text x="${x + w / 2}" y="${py + ph / 2}" class="t-sub" text-anchor="middle">click the cell to add fluorophores</text>` : ''}
       ${!acq?.ledLines?.length ? `<text x="${x + w / 2}" y="${py + 14}" class="t-sub" text-anchor="middle">no LED on in this acquisition</text>` : ''}
@@ -265,24 +278,21 @@ function camPanel(cam, ctx, store) {
   const shown = parts.filter((p) => p.t > 0).sort((a, b) => b.t - a.t);
   const areas = shown.map((p) => `<path d="${path(p.s, true)}" fill="${ctx.colors[p.key]}" fill-opacity="0.4" stroke="${ctx.colors[p.key]}" stroke-width="1.6"/>`).join('');
   const total = shown.length > 1 ? `<path d="${path(sum)}" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="1.3"/>` : '';
-  // signal share: bar + legend (the old "Camera sees" chart)
-  const segs = r && ci >= 0 ? r.fluors.map((f, fi) => ({ f, v: r.composition[fi][ci] })).filter((q) => q.v > 0).sort((a, b) => b.v - a.v) : [];
-  const barY = py + ph + 24;
-  let acc = 0;
-  const bar = segs.map((q) => {
-    const bw = (q.v / 100) * pw;
-    const o = `<rect x="${(px + acc).toFixed(1)}" y="${barY}" width="${bw.toFixed(1)}" height="12" fill="${ctx.colors[q.f.key]}"><title>${esc(q.f.name)}: ${fmt1(q.v)}% of ${CAM_NAME[cam]}'s signal</title></rect>`;
-    acc += bw;
-    return o;
+  // one bar per fluorophore: the fraction of its emitted light that reaches this camera
+  const fls = r?.fluors ?? [];
+  const barTop = py + ph + 36;
+  const nameW = Math.round(pw * 0.42);
+  const bars = fls.map((f, i) => {
+    const frac = ci >= 0 ? f.collection[cam] ?? 0 : 0;
+    const yy = barTop + i * 20;
+    const bx = px + nameW, bw = pw - nameW - 52;
+    return `<g><title>${esc(f.name)}: ${pct(frac)} of its emitted light reaches ${CAM_NAME[cam]}</title>
+      <circle cx="${px + 5}" cy="${yy + 6}" r="5" fill="${ctx.colors[f.key]}"/>
+      <text x="${px + 15}" y="${yy + 11}" class="t-row">${esc(short(f.name, Math.floor((nameW - 18) / 6.6)))}</text>
+      <rect x="${bx}" y="${yy}" width="${bw}" height="12" rx="2" class="bar-bg"/>
+      <rect x="${bx}" y="${yy}" width="${(bw * Math.min(1, frac)).toFixed(1)}" height="12" rx="2" fill="${ctx.colors[f.key]}"/>
+      <text x="${px + pw}" y="${yy + 11}" class="t-row-v" text-anchor="end">${pct(frac)}</text></g>`;
   }).join('');
-  // narrow panels: one column for up to two fluorophores so names aren't cut short
-  const nCols = w < 300 && segs.length <= 2 ? 1 : 2;
-  const colW = pw / nCols;
-  const maxChars = Math.max(6, Math.floor((colW - 50) / 6.2));
-  const legend = segs.slice(0, 4).map((q, i) => `<g transform="translate(${px + (i % nCols) * colW},${barY + 30 + Math.floor(i / nCols) * 18})">
-      <circle cx="5" cy="-5" r="5" fill="${ctx.colors[q.f.key]}"/>
-      <text x="15" y="0" class="t-row">${esc(short(q.f.name, maxChars))}</text>
-      <text x="${colW - 10}" y="0" class="t-row-v" text-anchor="end">${fmt1(q.v)}%</text></g>`).join('');
   const empty = ci < 0 ? 'no light reaches this camera (Gemini bypass)' : !r?.fluors.length ? 'no fluorophores in the sample' : !peak ? 'no signal' : '';
   return `${head}
     <g class="expanel campanel">
@@ -290,8 +300,8 @@ function camPanel(cam, ctx, store) {
       <text x="${x + 12}" y="${y + 45}" class="t-brand">${esc(short(model, Math.floor(w / 6.4)))}${qe != null && camId && ci >= 0 ? ` · ${pct(qe)} through QE` : ''}</text>
       ${ticks.join('')}${areas}${total}
       ${empty ? `<text x="${x + w / 2}" y="${py + ph / 2}" class="t-sub" text-anchor="middle">${esc(empty)}</text>` : ''}
-      <rect x="${px}" y="${barY}" width="${pw}" height="12" class="bar-bg"/>${bar}
-      ${legend}
+      ${fls.length ? `<text x="${px}" y="${barTop - 7}" class="t-axis">share of each fluorophore's emitted light reaching ${CAM_NAME[cam]}</text>` : ''}
+      ${bars}
     </g>`;
 }
 
@@ -326,7 +336,7 @@ function cubeButton(cx, cy, current) {
 
 export function renderDiagram(el, ctx, handlers) {
   const box = el.getBoundingClientRect();
-  L = layout(box.height > 0 ? Math.max(BASE_W, Math.round((VIEW_H * box.width) / box.height)) : BASE_W);
+  L = layout(box.height > 0 ? Math.max(BASE_W, Math.round((VIEW_H * box.width) / box.height)) : BASE_W, ctx.result?.fluors.length ?? 0);
   CX = L.CX;
   const { doc, store, acq, acqDoc } = ctx;
   const steps = Object.fromEntries((acq?.steps ?? []).map((s) => [s.id, s]));

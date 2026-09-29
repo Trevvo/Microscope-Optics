@@ -139,8 +139,18 @@ a { color: var(--accent); }
 .diagram .ring { fill: none; stroke: #e6eaee; stroke-width: 2.5; stroke-linecap: round; }
 .diagram .plus { font-size: 22px; fill: #6c7783; pointer-events: none; }
 .diagram .dc { stroke: #f2f5f7; stroke-width: 3; }
-.diagram .camglyph { fill: #cfd6dc; }
-.diagram .camlens { fill: #0b0d10; }
+.diagram .cam-body { fill: #cfd6dc; stroke: #0b0d10; stroke-width: 1.2; }
+.diagram .cam-top { fill: #9aa7b3; stroke: #0b0d10; stroke-width: 1; }
+.diagram .cam-window { fill: #2b3440; stroke: #0b0d10; stroke-width: 1; }
+.diagram .cam-led { fill: #26d7a6; }
+.diagram .cam-lens { fill: #3a4450; stroke: #0b0d10; stroke-width: 1; }
+.diagram .cam-rim { fill: #1b2127; stroke: #6f7a86; stroke-width: 1; }
+.diagram .camera.empty .cam-body { fill: #1b2026; stroke: #56616c; stroke-dasharray: 4 3; }
+.diagram .camera.empty .cam-top, .diagram .camera.empty .cam-lens, .diagram .camera.empty .cam-rim { fill: #1b2026; stroke: #56616c; }
+.diagram .camera.empty .cam-window, .diagram .camera.empty .cam-led { fill: none; }
+.diagram .camnode:hover .cam-body, .diagram .camnode:focus .cam-body { stroke: var(--accent); stroke-width: 2.5; }
+.diagram .camnode.off { opacity: .4; }
+.diagram .t-panel-sub { font-size: 12px; fill: var(--accent); font-weight: 600; }
 /* dark halo so labels stay legible where beams pass behind them */
 .diagram .t-title, .diagram .t-name, .diagram .t-sub, .diagram .t-frac, .diagram .t-box, .diagram .t-readout-h, .diagram .t-row, .diagram .t-row-v {
   paint-order: stroke; stroke: #07080a; stroke-width: 4px; stroke-linejoin: round;

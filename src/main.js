@@ -28,7 +28,7 @@ function loadPrefs() {
 }
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ exMin: state.exMin, notesOpen: state.notesOpen, detailsOpen: state.detailsOpen, matrixMode: state.matrixMode }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ exMin: state.exMin, camMin: state.camMin, notesOpen: state.notesOpen, detailsOpen: state.detailsOpen, matrixMode: state.matrixMode }));
   } catch { /* private mode etc. */ }
 }
 const prefs = loadPrefs();
@@ -48,6 +48,7 @@ const state = {
   acqIndex: 0,
   matrixMode: prefs.matrixMode ?? 'col',
   exMin: !!prefs.exMin,
+  camMin: prefs.camMin ?? { A: false, B: false },
   notesOpen: !!prefs.notesOpen,
   detailsOpen: !!prefs.detailsOpen,
   menuOpen: false,
@@ -524,6 +525,7 @@ const diagramHandlers = {
     });
   },
   onToggleExMin: () => { state.exMin = !state.exMin; savePrefs(); render(); },
+  onToggleCamMin: (cam) => { state.camMin = { ...state.camMin, [cam]: !state.camMin[cam] }; savePrefs(); render(); },
   onBeamHover: (em, label, event) => {
     const acq = state.result?.acquisitions[state.acqIndex];
     if (!em || !acq) return hideBeamTip();
@@ -617,7 +619,7 @@ function render() {
     renderTop();
     renderDiagram($('#diagram'), {
       doc, store, acq: state.result.acquisitions[state.acqIndex], acqDoc: doc.acquisitions[state.acqIndex],
-      fluorColors: state.colors, exMin: state.exMin, result: state.result, acqIndex: state.acqIndex, colors: state.colors,
+      fluorColors: state.colors, exMin: state.exMin, camMin: state.camMin, result: state.result, acqIndex: state.acqIndex, colors: state.colors,
       cubePreset: matchPreset(doc, store),
     }, diagramHandlers);
     redrawFluorPopover();

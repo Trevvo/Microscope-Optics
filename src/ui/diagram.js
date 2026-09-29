@@ -13,8 +13,10 @@ export const VIEW = { w: 1320, h: 752 };
 const LED_Y0 = 92;
 const LED_DY = 110;
 const STAGE_Y = 270; // top of the microscope stage
-const CX = 680; // optical axis (cell, objective, cube dichroic, emitter)
-const CELL_SCALE = 1.2;
+const CX = 630; // optical axis (cell, objective, cube dichroic, emitter)
+const CELL_SCALE = 1.1;
+const EX_PANEL = { x: 836, y: 36, w: 246, h: 262 }; // between the SpectraX top and the cell
+const CAM_PANEL = { B: { x: 14, y: 90, w: 400, ph: 140 }, A: { x: 14, y: 370, w: 264, ph: 116 } };
 const CAM_NAME = { A: 'Camera 1', B: 'Camera 2' };
 
 /** Slot definitions: id, position, title, picker categories, and doc accessors. */
@@ -22,19 +24,19 @@ export function slots(doc) {
   const list = doc.leds.flatMap((l, i) => {
     const y = LED_Y0 + i * LED_DY;
     return [
-      { id: `led:${l.key}`, x: 1222, y, r: 23, title: `${l.label} LED`, kind: 'led', cats: 'L', get: (d) => d.leds[i].spectrumId, set: (d, v) => (d.leds[i].spectrumId = v), ledKey: l.key },
-      { id: `paddle:${l.key}`, x: 1122, y, r: 20, title: `${l.label} paddle filter`, kind: 'filter', cats: 'filter', get: (d) => d.leds[i].paddleId, set: (d, v) => (d.leds[i].paddleId = v), ledKey: l.key },
+      { id: `led:${l.key}`, x: 1226, y, r: 23, title: `${l.label} LED`, kind: 'led', cats: 'L', get: (d) => d.leds[i].spectrumId, set: (d, v) => (d.leds[i].spectrumId = v), ledKey: l.key },
+      { id: `paddle:${l.key}`, x: 1140, y, r: 20, title: `${l.label} paddle filter`, kind: 'filter', cats: 'filter', get: (d) => d.leds[i].paddleId, set: (d, v) => (d.leds[i].paddleId = v), ledKey: l.key },
     ];
   });
   return list.concat([
-    { id: 'exciter', x: 872, y: 432, title: 'Cube exciter', kind: 'filter', cats: 'filter', get: (d) => d.cube.exciterId, set: (d, v) => (d.cube.exciterId = v) },
-    { id: 'cubeDichroic', x: 680, y: 432, title: 'Cube dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.cube.dichroicId, set: (d, v) => (d.cube.dichroicId = v) },
-    { id: 'emitter', x: 680, y: 578, title: 'Cube emitter', kind: 'filter', cats: 'filter', get: (d) => d.cube.emitterId, set: (d, v) => (d.cube.emitterId = v) },
-    { id: 'gemini', x: 420, y: 660, title: 'Gemini dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.splitter.dichroicId, set: (d, v) => (d.splitter.dichroicId = v) },
-    { id: 'armA', x: 280, y: 660, title: 'Arm 1 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armA.filterId, set: (d, v) => (d.splitter.armA.filterId = v) },
-    { id: 'camA', x: 112, y: 660, r: 32, title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
-    { id: 'armB', x: 420, y: 548, title: 'Arm 2 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armB.filterId, set: (d, v) => (d.splitter.armB.filterId = v) },
-    { id: 'camB', x: 420, y: 418, r: 32, title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
+    { id: 'exciter', x: 820, y: 440, title: 'Cube exciter', kind: 'filter', cats: 'filter', get: (d) => d.cube.exciterId, set: (d, v) => (d.cube.exciterId = v) },
+    { id: 'cubeDichroic', x: 630, y: 440, title: 'Cube dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.cube.dichroicId, set: (d, v) => (d.cube.dichroicId = v) },
+    { id: 'emitter', x: 630, y: 580, title: 'Cube emitter', kind: 'filter', cats: 'filter', get: (d) => d.cube.emitterId, set: (d, v) => (d.cube.emitterId = v) },
+    { id: 'gemini', x: 480, y: 675, title: 'Gemini dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.splitter.dichroicId, set: (d, v) => (d.splitter.dichroicId = v) },
+    { id: 'armA', x: 345, y: 675, title: 'Arm 1 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armA.filterId, set: (d, v) => (d.splitter.armA.filterId = v) },
+    { id: 'camA', x: 95, y: 675, r: 34, face: 'right', title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
+    { id: 'armB', x: 480, y: 545, title: 'Arm 2 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armB.filterId, set: (d, v) => (d.splitter.armB.filterId = v) },
+    { id: 'camB', x: 480, y: 402, r: 34, face: 'down', title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
   ]);
 }
 
@@ -113,7 +115,7 @@ function exPanel(x, y, w, h, ctx) {
   const exc = acq?.excitation;
   const series = [...fl.map((o) => ({ data: store.get(o.m.ex) })), exc && integrate(exc) > 0 ? { data: exc } : null].filter(Boolean);
   const [x0, x1] = series.length ? xRange(series) : [350, 700];
-  const rows = Math.max(1, Math.ceil(fl.length / Math.max(1, Math.min(3, fl.length))));
+  const rows = Math.max(1, Math.ceil(fl.length / Math.max(1, Math.min(w < 320 ? (fl.length <= 2 ? 1 : 2) : 3, fl.length))));
   const px = x + 16, pw = w - 32, py = y + 52, ph = h - 80;
   const sx = (l) => px + ((l - x0) / (x1 - x0)) * pw;
   const sy = (v) => py + ph - v * ph;
@@ -159,7 +161,7 @@ function exPanel(x, y, w, h, ctx) {
       <text x="${X}" y="${py - 4}" class="t-axis" text-anchor="middle">${ln.lambda} nm</text>${hits}`;
   }).join('');
   const maxAbs = Math.max(0, ...(acq?.perFluor ?? []).map((p) => p.absorbed));
-  const nCols = Math.max(1, Math.min(3, fl.length));
+  const nCols = Math.max(1, Math.min(w < 320 ? (fl.length <= 2 ? 1 : 2) : 3, fl.length));
   const colW = (w - 20) / nCols;
   const maxChars = Math.max(8, Math.floor((colW - 50) / 6.5));
   const legend = fl.map((o, i) => {
@@ -184,31 +186,111 @@ function exPanel(x, y, w, h, ctx) {
     </g>`;
 }
 
-// ------------------------------------------------------------------ camera readout
+// ------------------------------------------------------------------ camera panels
 
-function camReadout(x, y, cam, ctx, W = 196) {
+/** Light reaching a camera (after every filter and its QE), one translucent area per
+ *  fluorophore plus the total, with each fluorophore's share of the signal. Minimisable. */
+function camPanel(cam, ctx, store) {
+  const { x, y, w, ph } = CAM_PANEL[cam];
   const r = ctx.result;
+  const acq = ctx.acq;
+  const slotId = cam === 'A' ? 'camA' : 'camB';
+  const min = ctx.camMin?.[cam];
   const ci = r ? r.channels.findIndex((c) => c.acq === ctx.acqIndex && c.cam === cam) : -1;
-  const title = `<text x="${x}" y="${y}" class="t-readout-h">${CAM_NAME[cam]} sees</text>`;
-  if (!r || ci < 0 || !r.fluors.length) return `<g class="readout">${title}<text x="${x}" y="${y + 20}" class="t-sub">${!r?.fluors.length ? 'no fluorophores' : 'no light (bypassed)'}</text></g>`;
-  const segs = r.fluors.map((f, fi) => ({ f, v: r.composition[fi][ci] })).filter((s) => s.v > 0).sort((a, b) => b.v - a.v);
-  const tot = r.signal.reduce((s, row) => s + row[ci], 0);
-  const all = r.channels.map((_, j) => r.signal.reduce((s, row) => s + row[j], 0));
-  const best = Math.max(...all);
+  const totals = r ? r.channels.map((_, j) => r.signal.reduce((t, row) => t + row[j], 0)) : [];
+  const best = Math.max(0, ...totals);
+  const tot = ci >= 0 ? totals[ci] : 0;
   const rel = best > 0 ? (100 * tot) / best : 0;
+  const sig = ci < 0 ? 'no light' : tot > 0 ? `signal ${fmt1(rel)}${rel < 10 ? ' · weak' : ''}` : 'no signal';
+  const head = `<g class="expanel-head" data-cammin="${cam}" role="button" tabindex="0" aria-label="${min ? 'Show' : 'Minimise'} ${CAM_NAME[cam]} graph">
+      <title>Light reaching ${CAM_NAME[cam]}. Signal is relative to the brightest camera × acquisition.</title>
+      <rect x="${x}" y="${y}" width="${min ? 250 : w}" height="28" rx="7" class="panel-head"/>
+      <text x="${x + 12}" y="${y + 19}" class="t-panel">${CAM_NAME[cam]}</text>
+      <text x="${x + (min ? 222 : w - 30)}" y="${y + 19}" class="t-panel-sub" text-anchor="end">${esc(sig)}</text>
+      <text x="${x + (min ? 236 : w - 14)}" y="${y + 20}" class="t-panel" text-anchor="middle">${min ? '▸' : '–'}</text>
+    </g>`;
+  if (min) return head;
+
+  const camId = cam === 'A' ? ctx.doc.splitter.armA.cameraId : ctx.doc.splitter.armB.cameraId;
+  const model = camId ? store.display(camId).title : 'no camera selected (QE = 1)';
+  const qe = acq?.steps.find((s) => s.id === slotId)?.frac;
+  const px = x + 14, pw = w - 28, py = y + 50;
+  const parts = [];
+  const cum = r?.cumulative?.[slotId];
+  if (acq && cum && ci >= 0) {
+    for (const e of acq.emittedBy) {
+      const s = new Float64Array(N);
+      let t = 0;
+      for (let i = 0; i < N; i++) { s[i] = e.spectrum[i] * cum[i]; t += s[i]; }
+      parts.push({ key: e.key, name: e.name, s, t });
+    }
+  }
+  const sum = new Float64Array(N);
+  for (const p of parts) for (let i = 0; i < N; i++) sum[i] += p.s[i];
+  let peak = 0;
+  for (let i = 0; i < N; i++) if (sum[i] > peak) peak = sum[i];
+  const emitted = acq ? acq.emittedBy.map((e) => ({ data: e.spectrum })) : [];
+  const [x0, x1] = emitted.length ? xRange(emitted) : [450, 750];
+  const sx = (l) => px + ((l - x0) / (x1 - x0)) * pw;
+  const sy = (v) => py + ph - (peak > 0 ? v / peak : 0) * ph;
+  const path = (arr, close) => {
+    let d = '';
+    for (let i = 0; i < N; i++) {
+      const l = LAMBDA[i];
+      if (l < x0 || l > x1) continue;
+      d += `${d ? 'L' : 'M'}${sx(l).toFixed(1)},${sy(arr[i]).toFixed(1)}`;
+    }
+    return close ? `${d}L${sx(x1).toFixed(1)},${sy(0)}L${sx(x0).toFixed(1)},${sy(0)}Z` : d;
+  };
+  const ticks = [];
+  for (let t = Math.ceil(x0 / 50) * 50; t <= x1; t += 50) {
+    ticks.push(`<line x1="${sx(t)}" x2="${sx(t)}" y1="${py}" y2="${py + ph}" class="grid"/><text x="${sx(t)}" y="${py + ph + 14}" class="t-axis" text-anchor="middle">${t}</text>`);
+  }
+  const shown = parts.filter((p) => p.t > 0).sort((a, b) => b.t - a.t);
+  const areas = shown.map((p) => `<path d="${path(p.s, true)}" fill="${ctx.colors[p.key]}" fill-opacity="0.4" stroke="${ctx.colors[p.key]}" stroke-width="1.6"/>`).join('');
+  const total = shown.length > 1 ? `<path d="${path(sum)}" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="1.3"/>` : '';
+  // signal share: bar + legend (the old "Camera sees" chart)
+  const segs = r && ci >= 0 ? r.fluors.map((f, fi) => ({ f, v: r.composition[fi][ci] })).filter((q) => q.v > 0).sort((a, b) => b.v - a.v) : [];
+  const barY = py + ph + 24;
   let acc = 0;
-  const bar = segs.map((s) => {
-    const w = (s.v / 100) * W;
-    const out = `<rect x="${(x + acc).toFixed(1)}" y="${y + 8}" width="${Math.max(0, w).toFixed(1)}" height="16" fill="${ctx.colors[s.f.key]}"><title>${esc(s.f.name)}: ${fmt1(s.v)}%</title></rect>`;
-    acc += w;
-    return out;
+  const bar = segs.map((q) => {
+    const bw = (q.v / 100) * pw;
+    const o = `<rect x="${(px + acc).toFixed(1)}" y="${barY}" width="${bw.toFixed(1)}" height="12" fill="${ctx.colors[q.f.key]}"><title>${esc(q.f.name)}: ${fmt1(q.v)}% of ${CAM_NAME[cam]}'s signal</title></rect>`;
+    acc += bw;
+    return o;
   }).join('');
-  const list = segs.slice(0, 4).map((s, i) => `<g transform="translate(${x},${y + 44 + i * 19})"><circle cx="6" cy="-5" r="5" fill="${ctx.colors[s.f.key]}"/>
-      <text x="16" y="0" class="t-row">${esc(short(s.f.name, Math.floor((W - 60) / 6.6)))}</text><text x="${W}" y="0" class="t-row-v" text-anchor="end">${fmt1(s.v)}%</text></g>`).join('');
-  return `<g class="readout">${title}
-    <text x="${x + W}" y="${y}" class="t-sub" text-anchor="end"><title>Total signal relative to the brightest camera × acquisition</title>signal ${fmt1(rel)}${rel < 10 && tot ? ' · weak' : ''}</text>
-    <rect x="${x}" y="${y + 8}" width="${W}" height="16" class="bar-bg"/>${bar}
-    ${tot ? list : `<text x="${x}" y="${y + 44}" class="t-sub">no signal</text>`}
+  // narrow panels: one column for up to two fluorophores so names aren't cut short
+  const nCols = w < 300 && segs.length <= 2 ? 1 : 2;
+  const colW = pw / nCols;
+  const maxChars = Math.max(6, Math.floor((colW - 50) / 6.2));
+  const legend = segs.slice(0, 6).map((q, i) => `<g transform="translate(${px + (i % nCols) * colW},${barY + 30 + Math.floor(i / nCols) * 18})">
+      <circle cx="5" cy="-5" r="5" fill="${ctx.colors[q.f.key]}"/>
+      <text x="15" y="0" class="t-row">${esc(short(q.f.name, maxChars))}</text>
+      <text x="${colW - 10}" y="0" class="t-row-v" text-anchor="end">${fmt1(q.v)}%</text></g>`).join('');
+  const rows = Math.max(1, Math.ceil(Math.min(6, segs.length) / nCols));
+  const h = 50 + ph + 24 + 12 + 14 + rows * 18;
+  const empty = ci < 0 ? 'no light reaches this camera (Gemini bypass)' : !r?.fluors.length ? 'no fluorophores in the sample' : !peak ? 'no signal' : '';
+  return `${head}
+    <g class="expanel campanel">
+      <rect x="${x}" y="${y + 28}" width="${w}" height="${h - 28}" class="panel-body"/>
+      <text x="${x + 12}" y="${y + 45}" class="t-brand">${esc(short(model, Math.floor(w / 6.4)))}${qe != null && camId && ci >= 0 ? ` · ${pct(qe)} through QE` : ''}</text>
+      ${ticks.join('')}${areas}${total}
+      ${empty ? `<text x="${x + w / 2}" y="${py + ph / 2}" class="t-sub" text-anchor="middle">${esc(empty)}</text>` : ''}
+      <rect x="${px}" y="${barY}" width="${pw}" height="12" class="bar-bg"/>${bar}
+      ${legend}
+    </g>`;
+}
+
+/** Cartoon camera facing the incoming light ("right": light arrives from the right; "down": from below). */
+function cameraGlyph(x, y, face, set) {
+  const rot = face === 'down' ? 90 : 0;
+  return `<g transform="translate(${x} ${y}) rotate(${rot})" class="camera ${set ? 'set' : 'empty'}">
+    <rect x="-34" y="-22" width="50" height="44" rx="8" class="cam-body"/>
+    <rect x="-28" y="-31" width="18" height="10" rx="3" class="cam-top"/>
+    <circle cx="-9" cy="-2" r="10" class="cam-window"/>
+    <circle cx="-26" cy="-13" r="2.6" class="cam-led"/>
+    <rect x="15" y="-14" width="15" height="28" rx="3" class="cam-lens"/>
+    <rect x="29" y="-18" width="6" height="36" rx="2.5" class="cam-rim"/>
   </g>`;
 }
 
@@ -249,7 +331,7 @@ export function renderDiagram(el, ctx, handlers) {
     return `<path d="${d}" class="beam ${cls}" stroke="${col}" stroke-opacity="${op.toFixed(2)}" ${rel > 0.02 ? 'filter="url(#beamglow)"' : ''}/>${hit}`;
   };
   const beams = [];
-  const JX = 1062, JY = 400; // light-guide junction
+  const JX = 1080, JY = 430; // light-guide junction
   doc.leds.forEach((l) => {
     const led = pos[`led:${l.key}`];
     const p = pos[`paddle:${l.key}`];
@@ -302,6 +384,16 @@ export function renderDiagram(el, ctx, handlers) {
       : s.kind === 'dichroic'
         ? `<line x1="${s.x - r * 0.62}" y1="${s.y - r * 0.62}" x2="${s.x + r * 0.62}" y2="${s.y + r * 0.62}" class="dc"/>`
         : s.kind === 'camera' ? `<rect x="${s.x - 10}" y="${s.y - 8}" width="20" height="16" rx="3" class="camglyph"/><circle cx="${s.x}" cy="${s.y}" r="4" class="camlens"/>` : '';
+    if (s.kind === 'camera') {
+      const ty = s.face === 'down' ? s.y - 44 : s.y - 36;
+      return `<g class="node camnode ${id ? 'set' : 'empty'} ${dimmed ? 'off' : ''}" data-slot="${s.id}" tabindex="0" role="button" aria-label="${esc(s.title)}: ${esc(comp?.name ?? 'empty')}">
+        <title>${esc(s.title)}: ${esc(comp ? disp.title : 'no camera chosen — click to choose (QE counted as 1)')}</title>
+        <rect x="${s.x - 40}" y="${s.y - 40}" width="80" height="80" fill="transparent"/>
+        ${cameraGlyph(s.x, s.y, s.face, !!id)}
+        ${!id ? `<text x="${s.x - 9}" y="${s.y + (s.face === 'down' ? -2 : 5)}" class="plus" text-anchor="middle">+</text>` : ''}
+        <text x="${s.x}" y="${ty}" class="t-title" text-anchor="middle">${esc(s.title)}</text>
+      </g>`;
+    }
     const label = comp ? short(disp.title, small ? 16 : 26) : '';
     const brand = disp.brand ? `(${short(disp.brand, 30)})` : '';
     let text;
@@ -325,8 +417,8 @@ export function renderDiagram(el, ctx, handlers) {
     const c = centroid(store.get(l.spectrumId));
     return `<g class="toggle ${on ? 'on' : ''} ${l.spectrumId ? '' : 'disabled'}" data-led="${l.key}" role="switch" aria-checked="${!!on}" tabindex="0" aria-label="${esc(l.label)} LED on/off">
       <title>${esc(l.label)} LED ${on ? 'on' : 'off'} in this acquisition — click to toggle</title>
-      <rect x="1264" y="${y - 11}" width="40" height="22" rx="11" style="${on && c ? `fill:${wavelengthCSS(c)}` : ''}"/>
-      <circle cx="${on ? 1293 : 1275}" cy="${y}" r="8"/></g>`;
+      <rect x="1266" y="${y - 11}" width="40" height="22" rx="11" style="${on && c ? `fill:${wavelengthCSS(c)}` : ''}"/>
+      <circle cx="${on ? 1295 : 1277}" cy="${y}" r="8"/></g>`;
   }).join('');
 
   // cell glow ∝ how strongly each fluorophore is excited in this acquisition
@@ -343,30 +435,30 @@ export function renderDiagram(el, ctx, handlers) {
       <linearGradient id="cytoGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#a9d3e0" stop-opacity="0.42"/><stop offset="1" stop-color="#6f9fb2" stop-opacity="0.26"/></linearGradient>
       <radialGradient id="nucGrad" cx="0.42" cy="0.38" r="0.7"><stop offset="0" stop-color="#8f86e0" stop-opacity="0.7"/><stop offset="1" stop-color="#5a4fb5" stop-opacity="0.55"/></radialGradient>
     </defs>
-    <rect x="1070" y="30" width="244" height="${LED_DY * (doc.leds.length - 1) + 110}" rx="14" class="box"/>
-    <text x="1084" y="22" class="t-box">SPECTRA X</text>
-    <rect x="596" y="378" width="370" height="262" rx="14" class="box"/>
-    <text x="956" y="370" class="t-box" text-anchor="end">Filter cube</text>
-    ${cubeButton(894, 578, ctx.cubePreset)}
-    <rect x="226" y="482" width="268" height="246" rx="14" class="box"/>
-    <text x="238" y="504" class="t-box">Gemini splitter</text>
+    <rect x="1096" y="30" width="218" height="${LED_DY * (doc.leds.length - 1) + 110}" rx="14" class="box"/>
+    <text x="1108" y="22" class="t-box">SPECTRA X</text>
+    <rect x="550" y="388" width="350" height="262" rx="14" class="box"/>
+    <text x="890" y="380" class="t-box" text-anchor="end">Filter cube</text>
+    ${cubeButton(846, 588, ctx.cubePreset)}
+    <rect x="290" y="495" width="252" height="250" rx="14" class="box"/>
+    <text x="302" y="517" class="t-box">Gemini splitter</text>
     <path d="M${CX - 46},${STAGE_Y + 22} H${CX + 46} L${CX + 30},${STAGE_Y + 78} H${CX - 30} Z" class="objective"/>
     <text x="${CX + 58}" y="${STAGE_Y + 56}" class="t-box">Objective</text>
     ${beams.join('')}
-    <rect x="${CX - 225}" y="${STAGE_Y}" width="450" height="16" rx="3" fill="url(#stageGrad)" class="stage"/>
-    <text x="${CX - 216}" y="${STAGE_Y + 34}" class="t-box">Stage</text>
+    <rect x="${CX - 200}" y="${STAGE_Y}" width="400" height="16" rx="3" fill="url(#stageGrad)" class="stage"/>
+    <text x="${CX + 200}" y="${STAGE_Y + 34}" class="t-box" text-anchor="end">Stage</text>
     <g class="node sample" data-slot="sample" tabindex="0" role="button" aria-label="Sample: ${enabled.length} fluorophores. Click to edit.">
       <title>Sample — click to add or remove fluorophores</title>
-      <rect x="${CX - 205}" y="${STAGE_Y - 96}" width="400" height="97" fill="transparent"/>
+      <rect x="${CX - 190}" y="${STAGE_Y - 90}" width="370" height="91" fill="transparent"/>
       ${cell(CX, STAGE_Y, enabled, ctx.fluorColors, glow)}
       <text x="${CX}" y="${STAGE_Y - 96}" class="t-title t-sample" text-anchor="middle">${names.length ? esc(names.slice(0, 4).join(' · ')) + (names.length > 4 ? ` +${names.length - 4}` : '') : 'Sample — click to add fluorophores'}</text>
     </g>
-    ${exPanel(24, 44, 430, 262, { acq, store, doc, colors: ctx.fluorColors, exMin: ctx.exMin })}
+    ${exPanel(EX_PANEL.x, EX_PANEL.y, EX_PANEL.w, EX_PANEL.h, { acq, store, doc, colors: ctx.fluorColors, exMin: ctx.exMin })}
     ${nodes}
     ${toggles}
-    ${camReadout(20, 500, 'A', ctx)}
-    ${camReadout(150, 372, 'B', ctx, 222)}
-    ${!hasSplit ? `<g class="bypass" data-bypass="1" role="button" tabindex="0"><text x="360" y="748" class="t-sub" text-anchor="middle">No Gemini dichroic → bypass to ${CAM_NAME[bypass]} (click to switch)</text></g>` : ''}
+    ${camPanel('B', ctx, store)}
+    ${camPanel('A', ctx, store)}
+    ${!hasSplit ? `<g class="bypass" data-bypass="1" role="button" tabindex="0"><text x="416" y="749" class="t-sub" text-anchor="middle">No Gemini dichroic → bypass to ${CAM_NAME[bypass]} (click to switch)</text></g>` : ''}
   </svg>`;
 
   const act = (sel, fn) => el.querySelectorAll(sel).forEach((g) => {
@@ -377,6 +469,7 @@ export function renderDiagram(el, ctx, handlers) {
   act('[data-led]', (g) => handlers.onToggleLed(g.dataset.led));
   act('[data-bypass]', () => handlers.onSlot('bypass'));
   act('[data-exmin]', () => handlers.onToggleExMin());
+  act('[data-cammin]', (g) => handlers.onToggleCamMin(g.dataset.cammin));
   act('[data-cube]', (g) => handlers.onCubeMenu(g.getBoundingClientRect()));
   el.querySelectorAll('.beam-hit').forEach((p) => {
     p.addEventListener('mousemove', (e) => handlers.onBeamHover(p.dataset.em, p.dataset.label, e));

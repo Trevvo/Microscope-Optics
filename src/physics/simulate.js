@@ -66,7 +66,10 @@ function detectionPaths(input) {
 export function simulate(input) {
   const { leds = [], cube = {}, fluors = [], acquisitions = [] } = input;
   const det = detectionPaths(input);
-  const cubeReflect = cube.dichroic ? complement(cube.dichroic) : null;
+  // An empty dichroic slot reflects nothing: excitation passes straight through and never
+  // reaches the sample (emission still passes, T = 1).
+  const cubeReflect = cube.dichroic ? complement(cube.dichroic) : zeros();
+  const cubePass = cube.dichroic ?? null; // excitation transmitted through the dichroic (null = all)
 
   // Fluorophore shapes and detection efficiencies do not depend on the acquisition.
   const F = fluors.map((raw) => {
@@ -116,6 +119,12 @@ export function simulate(input) {
     const afterEx = mul(src, cube.exciter);
     const atSample = mul(afterEx, cubeReflect);
     const rawTotal = integrate(raw);
+    // Excitation that goes straight through the cube dichroic instead of up to the sample.
+    const passed = mul(afterEx, cubePass);
+    const exTotal = integrate(afterEx);
+    let pkPass = 0;
+    for (let j = 1; j < N; j++) if (passed[j] > passed[pkPass]) pkPass = j;
+    const cubeLeak = { passed, arriving: afterEx, frac: exTotal > 0 ? integrate(passed) / exTotal : 0, peakNm: passed[pkPass] > 0 ? LAMBDA[pkPass] : null };
 
     const perFluor = F.map((f) => {
       const overlap = dot(atSample, f.exN);
@@ -173,7 +182,7 @@ export function simulate(input) {
     }
 
     for (const c of det.active) channels.push({ acq: ai, cam: c, label: `${acq.name || `Acq ${ai + 1}`} · Camera ${c === 'A' ? 1 : 2}` });
-    return { name: acq.name, ledsOn: on.map((l) => l.key), perFluor, steps, leakage, excitation: atSample, ledLines, emittedBy };
+    return { name: acq.name, ledsOn: on.map((l) => l.key), perFluor, steps, leakage, excitation: atSample, ledLines, emittedBy, cubeLeak };
   });
 
   // signal[f][ch] = absorbed · QY · collection

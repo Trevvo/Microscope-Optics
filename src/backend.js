@@ -3,7 +3,9 @@
 //   watchConfigs(cb) watchConfig(id, cb) createConfig(content)
 //   saveConfig(id, content, base) → {saved, merged, conflicts, remote}: atomically merges our
 //     edits (relative to base) into the server's current copy; writes nothing on conflict
-//   addRevision(id, snapshot, label) listRevisions(id)
+//   ensureConfig(id, content): create a config with a fixed id only if it doesn't exist (TEST)
+//   deleteConfig(id): delete a config and all its revisions
+//   addRevision(id, snapshot, label, kind) listRevisions(id)   kind: 'manual' | 'save'
 //   watchCustomSpectra(cb) addCustomSpectrum({name, cat, sub, data})
 //   watchInventory(cb) saveInventory(ids)   — the lab's "our filters" list (null until first saved)
 // FirebaseBackend is used when src/firebase-config.js has an apiKey; otherwise
@@ -105,11 +107,34 @@ class FirebaseBackend {
     });
   }
 
-  addRevision(id, snapshot, label = '') {
+  addRevision(id, snapshot, label = '', kind = 'manual') {
     const { collection, addDoc, serverTimestamp } = this.f;
     return addDoc(collection(this.db, 'configs', id, 'revisions'), {
-      snapshot, label, savedBy: this.userName, savedAt: serverTimestamp(),
+      snapshot, label, kind, savedBy: this.userName, savedAt: serverTimestamp(),
     });
+  }
+
+  ensureConfig(id, initial) {
+    const { doc, runTransaction } = this.f;
+    const ref = doc(this.db, 'configs', id);
+    return runTransaction(this.db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists()) return false;
+      tx.set(ref, { ...initial, ...this.stamp() });
+      return true;
+    });
+  }
+
+  async deleteConfig(id) {
+    const { collection, doc, getDocs, writeBatch, deleteDoc } = this.f;
+    // history first (a batch holds at most 500 writes), then the config itself
+    const revs = await getDocs(collection(this.db, 'configs', id, 'revisions'));
+    for (let i = 0; i < revs.docs.length; i += 400) {
+      const batch = writeBatch(this.db);
+      for (const d of revs.docs.slice(i, i + 400)) batch.delete(d.ref);
+      await batch.commit();
+    }
+    await deleteDoc(doc(this.db, 'configs', id));
   }
 
   async listRevisions(id) {
@@ -249,9 +274,24 @@ class LocalBackend {
     return { saved: true, merged, conflicts, remote: server, changedByOthers: !!theirs && !deepEqual(merged, local) };
   }
 
-  async addRevision(id, snapshot, label = '') {
+  async ensureConfig(id, initial) {
+    if (this.data.configs[id]) return false;
+    this.data.configs[id] = { ...initial, ...this.stamp() };
+    this.persist();
+    this.emit();
+    return true;
+  }
+
+  async deleteConfig(id) {
+    delete this.data.configs[id];
+    delete this.data.revisions[id];
+    this.persist();
+    this.emit();
+  }
+
+  async addRevision(id, snapshot, label = '', kind = 'manual') {
     (this.data.revisions[id] ??= []).unshift({
-      id: Math.random().toString(36).slice(2, 10), snapshot, label, savedBy: this.userName, savedAt: new Date().toISOString(),
+      id: Math.random().toString(36).slice(2, 10), snapshot, label, kind, savedBy: this.userName, savedAt: new Date().toISOString(),
     });
     this.data.revisions[id] = this.data.revisions[id].slice(0, 100);
     this.persist();

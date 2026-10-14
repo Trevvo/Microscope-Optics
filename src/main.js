@@ -1,7 +1,7 @@
 import './style.css';
 import { SpectraStore } from './data/spectraStore.js';
 import { makeBackend } from './backend.js';
-import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig } from './schema.js';
+import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig, TEST_ID, revisionKind } from './schema.js';
 import { idsToLoad, resolve, warnings } from './resolve.js';
 import { merge3 } from './merge.js';
 import { simulate } from './physics/simulate.js';
@@ -18,9 +18,6 @@ import { peakNorm } from './ui/plots.js';
 import { fluorColor } from './ui/color.js';
 
 const $ = (s) => document.querySelector(s);
-const SAVE_DEBOUNCE_MS = 1200;
-const SAVE_MAX_WAIT_MS = 5000; // continuous editing still saves at least this often
-const SNAPSHOT_EVERY_MS = 10 * 60 * 1000;
 const PREFS_KEY = 'microscope-optics:prefs';
 
 function loadPrefs() {
@@ -28,7 +25,7 @@ function loadPrefs() {
 }
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ exMin: state.exMin, camMin: state.camMin, notesOpen: state.notesOpen, detailsOpen: state.detailsOpen, matrixMode: state.matrixMode }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ exMin: state.exMin, camMin: state.camMin, leakThreshold: state.leakThreshold, notesOpen: state.notesOpen, detailsOpen: state.detailsOpen, matrixMode: state.matrixMode }));
   } catch { /* private mode etc. */ }
 }
 const prefs = loadPrefs();
@@ -41,7 +38,7 @@ const state = {
   currentId: null,
   doc: null, // working copy (normalized)
   base: null, // content of the last version synced with the server (merge base)
-  conflict: null, // remote doc awaiting the user's choice; autosave paused while set
+  conflict: null, // remote doc awaiting the user's choice; saving paused while set
   dirty: false,
   editSeq: 0,
   status: { text: '', cls: '' },
@@ -49,14 +46,14 @@ const state = {
   matrixMode: prefs.matrixMode ?? 'col',
   exMin: !!prefs.exMin,
   camMin: prefs.camMin ?? { A: false, B: false },
+  leakThreshold: Number.isFinite(prefs.leakThreshold) ? prefs.leakThreshold : 5, // % excitation through the cube dichroic that triggers the warning
   notesOpen: !!prefs.notesOpen,
   detailsOpen: !!prefs.detailsOpen,
   menuOpen: false,
-  showArchived: false,
   filter: '',
-  revisions: null,
-  snapshotted: new Set(), // configs with a pre-edit snapshot this session
-  lastSnapshotAt: 0,
+  revisions: null, // loaded history for the open config (null = panel closed)
+  historyTab: 'manual', // 'manual' | 'save'
+  confirmDelete: false,
   result: null,
   colors: {},
   warnList: [],
@@ -119,38 +116,56 @@ function startApp(user) {
       state.inventory = new Set(ids);
     }
   });
-  state.unsub.configs = state.backend.watchConfigs(async (list) => {
+  // the shared TEST sandbox always exists; every session starts on it (deep links still work on load)
+  const startHash = location.hash;
+  state.backend.ensureConfig(TEST_ID, { ...seedConfig(state.store.index), name: 'TEST' })
+    .catch((e) => console.warn('could not create TEST', e))
+    .finally(() => {
+      if (!/^#\/config\//.test(startHash) || startHash === `#/config/${TEST_ID}`) location.hash = `#/config/${TEST_ID}`;
+      route();
+    });
+  state.unsub.configs = state.backend.watchConfigs((list) => {
     state.configs = list.map((c) => ({ ...c, name: c.name || 'Untitled' }));
-    if (!list.length && !state.seeding) {
-      state.seeding = true;
-      const id = await state.backend.createConfig(seedConfig(state.store.index));
-      location.hash = `#/config/${id}`;
-      return;
-    }
-    if (!state.currentId) route();
-    else renderTop();
+    renderTop();
   });
   window.addEventListener('hashchange', route);
 }
 
-function route() {
+let routing = false;
+async function route() {
+  if (routing) return;
   const m = location.hash.match(/^#\/config\/([\w-]+)/);
-  const id = m?.[1];
-  if (id && id !== state.currentId) return openConfig(id);
-  if (!id && state.configs.length) {
-    const first = state.configs.filter((c) => !c.archived).sort((a, b) => a.name.localeCompare(b.name))[0] ?? state.configs[0];
-    location.hash = `#/config/${first.id}`;
+  const id = m?.[1] ?? TEST_ID;
+  if (id === state.currentId) return;
+  if (state.dirty && state.doc) {
+    routing = true;
+    const choice = await confirmUnsaved();
+    routing = false;
+    if (choice === 'cancel') { location.hash = `#/config/${state.currentId}`; return; }
+    if (choice === 'save') { await save(); if (state.dirty) { location.hash = `#/config/${state.currentId}`; return; } }
   }
+  openConfig(id);
+}
+
+/** In-app prompt for unsaved changes. Resolves 'save' | 'discard' | 'cancel'. */
+function confirmUnsaved() {
+  return new Promise((resolve) => {
+    const el = document.createElement('div');
+    el.className = 'modal-back';
+    el.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
+      <p><b>Unsaved changes</b> in “${(state.doc?.name ?? '').replace(/[<&]/g, '')}”.</p>
+      <div class="row"><button data-c="save" class="primary">Save</button><button data-c="discard">Discard</button><button data-c="cancel">Cancel</button></div></div>`;
+    document.body.appendChild(el);
+    const done = (c) => { el.remove(); if (c === 'discard') { state.dirty = false; state.conflict = null; hideBanner(); } resolve(c); };
+    el.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => done(b.dataset.c)));
+    el.addEventListener('keydown', (e) => { if (e.key === 'Escape') done('cancel'); });
+    el.querySelector('[data-c="save"]').focus();
+  });
 }
 
 // ---------------------------------------------------------------- config lifecycle
 
-async function flushSave() {
-  if (state.dirty) await save();
-}
-
 async function openConfig(id) {
-  await flushSave();
   closePicker();
   state.unsub.config?.();
   state.currentId = id;
@@ -158,6 +173,8 @@ async function openConfig(id) {
   state.base = null;
   state.conflict = null;
   state.revisions = null;
+  state.confirmDelete = false;
+  state.dirty = false;
   state.acqIndex = 0;
   state.menuOpen = false;
   hideBanner();
@@ -167,10 +184,10 @@ async function openConfig(id) {
       // leaving the previous diagram on screen with nothing behind it.
       state.doc = null;
       $('#diagram').innerHTML = '';
-      const other = state.configs.find((c) => c.id !== id && !c.archived) ?? state.configs.find((c) => c.id !== id);
-      if (other) {
-        flash('That configuration was not found — opened another one');
-        location.hash = `#/config/${other.id}`;
+      if (id !== TEST_ID) {
+        flash('That configuration was not found (it may have been deleted) — opened TEST');
+        state.currentId = null;
+        location.hash = `#/config/${TEST_ID}`;
       } else {
         state.status = { text: 'Configuration not found', cls: 'bad' };
         renderTop();
@@ -186,20 +203,18 @@ async function openConfig(id) {
       if (!conflicts.length) {
         state.doc = normalizeConfig(merged);
         if (state.conflict) {
-          // the clash went away (e.g. they undid it): resume autosave
+          // the clash went away (e.g. they undid it): saving is possible again
           state.conflict = null;
           hideBanner();
-          clearTimeout(saveTimer);
-          saveTimer = setTimeout(save, SAVE_DEBOUNCE_MS);
+          setStatus('Unsaved changes', 'pending');
         }
         flash(`Merged ${remote.updatedBy ?? 'someone'}'s changes with yours`);
         render();
         return;
       }
-      clearTimeout(saveTimer); // don't overwrite their change until the user decides
-      state.conflict = remote;
+      state.conflict = remote; // don't overwrite their change until the user decides
       showBanner(remote, conflicts);
-      setStatus('Paused — conflicting change', 'bad');
+      setStatus('Conflicting change — choose below', 'bad');
       return;
     }
     const had = !!state.doc;
@@ -211,16 +226,8 @@ async function openConfig(id) {
   });
 }
 
-function snapshotBeforeFirstEdit() {
-  const id = state.currentId;
-  if (state.snapshotted.has(id)) return;
-  state.snapshotted.add(id);
-  state.backend.addRevision(id, contentOf(state.doc), `before ${state.user}'s edits`).catch(console.warn);
-}
-
 function edit(mutator) {
   if (!state.doc) return;
-  snapshotBeforeFirstEdit();
   mutator(state.doc);
   markDirty();
   render();
@@ -229,27 +236,24 @@ function edit(mutator) {
 /** Edit without re-rendering (keeps focus and caret in title/notes inputs). */
 function editQuiet(mutator) {
   if (!state.doc) return;
-  snapshotBeforeFirstEdit();
   mutator(state.doc);
   markDirty();
 }
 
+/** Edits only mark the config dirty; nothing is written until Save (button or Ctrl/Cmd+S). */
 function markDirty() {
-  if (!state.dirty) dirtySince = Date.now();
+  const was = state.dirty;
   state.dirty = true;
   state.editSeq++;
-  if (state.conflict) return; // autosave paused until the banner is resolved
-  setStatus('Unsaved…', 'pending');
-  clearTimeout(saveTimer);
-  const wait = Math.max(0, Math.min(SAVE_DEBOUNCE_MS, dirtySince + SAVE_MAX_WAIT_MS - Date.now()));
-  saveTimer = setTimeout(save, wait);
+  if (state.conflict) return;
+  setStatus('Unsaved changes', 'pending');
+  if (!was) renderTop(); // light up the Save button
 }
 
-let saveTimer;
-let dirtySince = 0;
+let saving = false;
 async function save() {
-  clearTimeout(saveTimer);
-  if (!state.doc || !state.dirty || state.conflict) return;
+  if (!state.doc || !state.dirty || state.conflict || saving) return;
+  saving = true;
   const seq = state.editSeq;
   const id = state.currentId;
   const content = contentOf(state.doc);
@@ -260,7 +264,7 @@ async function save() {
       // someone changed the same field since we last synced: write nothing, ask the user
       state.conflict = res.remote;
       showBanner(res.remote, res.conflicts);
-      setStatus('Paused — conflicting change', 'bad');
+      setStatus('Conflicting change — choose below', 'bad');
       return;
     }
     state.base = contentOf(res.merged);
@@ -271,14 +275,16 @@ async function save() {
       render();
     }
     if (seq === state.editSeq) state.dirty = false;
-    else dirtySince = Date.now();
     setStatus(`Saved ✓ ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 'ok');
-    if (Date.now() - state.lastSnapshotAt > SNAPSHOT_EVERY_MS) {
-      state.lastSnapshotAt = Date.now();
-      state.backend.addRevision(id, content, 'autosnapshot').catch(console.warn);
-    }
+    // every Save press is recorded in the "Saves" history
+    state.backend.addRevision(id, contentOf(res.merged), `saved by ${state.user}`, 'save')
+      .then(async () => { if (state.revisions && state.currentId === id) { state.revisions = await state.backend.listRevisions(id); renderTop(); } })
+      .catch(console.warn);
+    renderTop();
   } catch (e) {
     setStatus(`Save failed: ${e.message}`, 'bad');
+  } finally {
+    saving = false;
   }
 }
 
@@ -289,21 +295,27 @@ function setStatus(text, cls) {
 }
 
 window.addEventListener('beforeunload', (e) => {
-  if (state.dirty) { save(); e.preventDefault(); }
+  if (state.dirty) e.preventDefault(); // browser's "leave site?" prompt; nothing is saved automatically
+});
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    save();
+  }
 });
 
 function showBanner(remote, conflicts = []) {
   const b = $('#banner');
   b.hidden = false;
   const what = conflicts.map((c) => c.split(/[.[]/)[0]).filter((v, i, a) => a.indexOf(v) === i).join(', ');
-  b.innerHTML = `<b>${remote.updatedBy ?? 'Someone'}</b> changed the same thing you're editing${what ? ` (${what})` : ''}. Autosave is paused.
+  b.innerHTML = `<b>${remote.updatedBy ?? 'Someone'}</b> saved a change to the same thing you're editing${what ? ` (${what})` : ''}.
     <button data-theirs>Use theirs</button> <button data-mine>Keep mine</button>`;
   b.querySelector('[data-theirs]').onclick = () => {
     state.doc = migrateLeds(normalizeConfig(remote), state.store.index);
     state.base = contentOf(state.doc);
     state.conflict = null;
     state.dirty = false;
-    clearTimeout(saveTimer);
     hideBanner();
     setStatus('Saved', 'ok');
     render();
@@ -331,8 +343,9 @@ function flash(text) {
 // ---------------------------------------------------------------- top bar actions
 
 const topActions = {
-  toggleMenu: () => { state.menuOpen = !state.menuOpen; renderTop(); $('#topbar .cfg-filter')?.focus(); },
+  toggleMenu: () => { state.menuOpen = !state.menuOpen; state.confirmDelete = false; renderTop(); $('#topbar .cfg-filter')?.focus(); },
   open: (id) => { state.menuOpen = false; location.hash = `#/config/${id}`; },
+  save: () => save(),
   create: async () => {
     const d = seedConfig(state.store.index);
     d.name = 'New config';
@@ -342,40 +355,70 @@ const topActions = {
   },
   duplicate: async () => {
     if (!state.doc) return;
-    await flushSave();
-    const c = contentOf(state.doc);
-    c.name = `${c.name} (copy)`;
+    const c = contentOf(state.doc); // includes any unsaved edits; the original is left as last saved
+    c.name = `${state.currentId === TEST_ID ? 'Copy of TEST' : `${c.name} (copy)`}`;
     c.archived = false;
     const id = await state.backend.createConfig(c);
+    state.dirty = false; // the edits now live in the copy
     state.menuOpen = false;
     location.hash = `#/config/${id}`;
   },
-  archive: () => edit((d) => (d.archived = !d.archived)),
-  rename: (v) => editQuiet((d) => (d.name = v || 'Untitled')),
+  askDelete: () => { if (state.currentId !== TEST_ID) { state.confirmDelete = true; renderTop(); } },
+  cancelDelete: () => { state.confirmDelete = false; renderTop(); },
+  doDelete: async () => {
+    const id = state.currentId;
+    if (!id || id === TEST_ID) return;
+    const name = state.doc?.name ?? 'config';
+    state.confirmDelete = false;
+    try {
+      state.unsub.config?.();
+      state.unsub.config = null;
+      await state.backend.deleteConfig(id);
+      state.dirty = false;
+      state.currentId = null;
+      state.menuOpen = false;
+      flash(`Deleted “${name}”`);
+      location.hash = `#/config/${TEST_ID}`;
+      route();
+    } catch (e) {
+      flash(`Delete failed: ${e.message}`);
+      openConfig(id);
+    }
+  },
+  rename: (v) => { if (state.currentId !== TEST_ID) editQuiet((d) => (d.name = v || 'Untitled')); },
   notes: (v) => editQuiet((d) => (d.description = v)),
   toggleNotes: () => { state.notesOpen = !state.notesOpen; savePrefs(); renderTop(); if (state.notesOpen) $('#topbar .notes-text')?.focus(); },
   saveVersion: async () => {
     const label = window.prompt?.('Label for this version (optional):', '') ?? '';
-    await flushSave();
-    await state.backend.addRevision(state.currentId, contentOf(state.doc), label || `version by ${state.user}`);
-    flash('Version saved');
-    if (state.revisions) state.revisions = await state.backend.listRevisions(state.currentId);
+    if (label === null) return;
+    await state.backend.addRevision(state.currentId, contentOf(state.doc), label || `version by ${state.user}`, 'manual');
+    flash(state.dirty ? 'Version saved (the config itself still has unsaved changes)' : 'Version saved');
+    state.historyTab = 'manual';
+    state.revisions = await state.backend.listRevisions(state.currentId);
     renderTop();
   },
   history: async () => {
     state.revisions = state.revisions ? null : await state.backend.listRevisions(state.currentId);
     renderTop();
   },
+  historyTab: (t) => { state.historyTab = t; renderTop(); },
   restore: (revId) => {
     const r = state.revisions?.find((x) => x.id === revId);
     if (!r) return;
     const snap = migrateLeds(normalizeConfig(r.snapshot), state.store.index);
+    if (state.currentId === TEST_ID) snap.name = 'TEST';
     edit((d) => Object.assign(d, snap));
-    flash('Restored — autosaving');
+    flash('Restored — press Save to keep it');
   },
-  signOut: async () => { await flushSave(); state.backend.signOut(); },
+  signOut: async () => {
+    if (state.dirty) {
+      const c = await confirmUnsaved();
+      if (c === 'cancel') return;
+      if (c === 'save') { await save(); if (state.dirty) return; }
+    }
+    state.backend.signOut();
+  },
   setFilter: (v) => { state.filter = v; renderTop(); },
-  toggleArchived: () => { state.showArchived = !state.showArchived; renderTop(); },
   selectAcq: (i) => { state.acqIndex = i; render(); },
   renameAcq: (i, v) => edit((d) => (d.acquisitions[i].name = v)),
   deleteAcq: (i) => { edit((d) => d.acquisitions.splice(i, 1)); state.acqIndex = Math.max(0, i - 1); render(); },
@@ -540,6 +583,7 @@ const diagramHandlers = {
     });
   },
   onToggleExMin: () => { state.exMin = !state.exMin; savePrefs(); render(); },
+  onLeakThreshold: (v) => { state.leakThreshold = Math.max(0, Math.min(25, v)); savePrefs(); render(); },
   onToggleCamMin: (cam) => { state.camMin = { ...state.camMin, [cam]: !state.camMin[cam] }; savePrefs(); render(); },
   onBeamHover: (em, label, event) => {
     const acq = state.result?.acquisitions[state.acqIndex];
@@ -566,8 +610,9 @@ function preserveFocus(el, fn) {
 function renderTop() {
   preserveFocus($('#topbar'), () => renderTopbar($('#topbar'), {
     doc: state.doc, configs: state.configs, currentId: state.currentId, user: state.user, mode: state.backend.mode,
-    status: state.status, menuOpen: state.menuOpen, showArchived: state.showArchived, filter: state.filter,
-    revisions: state.revisions, notesOpen: state.notesOpen, acqIndex: state.acqIndex,
+    status: state.status, dirty: state.dirty, menuOpen: state.menuOpen, filter: state.filter,
+    revisions: state.revisions, historyTab: state.historyTab, confirmDelete: state.confirmDelete,
+    notesOpen: state.notesOpen, acqIndex: state.acqIndex,
     warnCount: state.warnList.filter((w) => w.level === 'warn').length, detailsOpen: state.detailsOpen, on: topActions,
   }));
 }
@@ -634,7 +679,7 @@ function render() {
     renderTop();
     renderDiagram($('#diagram'), {
       doc, store, acq: state.result.acquisitions[state.acqIndex], acqDoc: doc.acquisitions[state.acqIndex],
-      fluorColors: state.colors, exMin: state.exMin, camMin: state.camMin, result: state.result, acqIndex: state.acqIndex, colors: state.colors,
+      fluorColors: state.colors, exMin: state.exMin, camMin: state.camMin, leakThreshold: state.leakThreshold, result: state.result, acqIndex: state.acqIndex, colors: state.colors,
       cubePreset: matchPreset(doc, store),
     }, diagramHandlers);
     redrawFluorPopover();

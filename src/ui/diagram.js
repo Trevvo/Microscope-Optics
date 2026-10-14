@@ -54,8 +54,8 @@ export function slots(doc) {
     { id: 'gemini', x: 440 + L.s, y: 675, title: 'Gemini dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.splitter.dichroicId, set: (d, v) => (d.splitter.dichroicId = v) },
     { id: 'armA', x: 300 + L.s, y: 675, title: 'Arm 1 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armA.filterId, set: (d, v) => (d.splitter.armA.filterId = v) },
     { id: 'camA', x: 130 + L.s, y: 675, r: 34, face: 'right', title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
-    { id: 'armB', x: 440 + L.s, y: 590, title: 'Arm 2 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armB.filterId, set: (d, v) => (d.splitter.armB.filterId = v) },
-    { id: 'camB', x: 440 + L.s, y: 420, r: 34, face: 'down', title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
+    { id: 'armB', x: 440 + L.s, y: 560, title: 'Arm 2 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armB.filterId, set: (d, v) => (d.splitter.armB.filterId = v) },
+    { id: 'camB', x: 440 + L.s, y: 390, r: 34, face: 'down', title: 'Camera 2', kind: 'camera', cats: 'C', get: (d) => d.splitter.armB.cameraId, set: (d, v) => (d.splitter.armB.cameraId = v) },
   ]);
 }
 
@@ -209,7 +209,7 @@ function exPanel(x, y, w, h, ctx) {
       </g>
       ${lines}
       ${!fl.length ? `<text x="${x + w / 2}" y="${py + ph / 2}" class="t-sub" text-anchor="middle">click the cell to add fluorophores</text>` : ''}
-      ${!acq?.ledLines?.length ? `<text x="${x + w / 2}" y="${py + 14}" class="t-sub" text-anchor="middle">no LED on in this acquisition</text>` : ''}
+      ${!acq?.ledLines?.length ? `<text x="${x + w / 2}" y="${py + 14}" class="t-sub" text-anchor="middle">${acq?.ledsOn?.length ? 'no excitation reaches the sample' : 'no LED on in this acquisition'}</text>` : ''}
       ${fl.length ? `<text x="${x + 12}" y="${y + h + 4 + rows * 18 - 3}" class="t-axis">legend value = relative excitation</text>` : ''}
       ${legend}
     </g>`;
@@ -318,6 +318,50 @@ function cameraGlyph(x, y, face, set) {
   </g>`;
 }
 
+// ------------------------------------------------------------------ cube-dichroic leak warning
+
+/** WARNING above the cell: excitation arriving at the cube dichroic (grey), the dichroic's
+ *  transmission (white), and the part that passes straight through instead of reflecting (red). */
+function leakPanel(leak, doc, store) {
+  const x = 404 + L.s, y = 8, w = 424, h = 150;
+  const px = x + 14, pw = w - 28, py = y + 40, ph = h - 80;
+  const [x0, x1] = xRange([{ data: leak.arriving }]);
+  const sx = (l) => px + ((l - x0) / (x1 - x0)) * pw;
+  let m = 0;
+  for (let i = 0; i < N; i++) if (leak.arriving[i] > m) m = leak.arriving[i];
+  const sy = (v) => py + ph - (m > 0 ? v / m : 0) * ph;
+  const path = (arr, close, scaleTo1 = false) => {
+    let d = '';
+    for (let i = 0; i < N; i++) {
+      const l = LAMBDA[i];
+      if (l < x0 || l > x1) continue;
+      const v = scaleTo1 ? py + ph - Math.min(1.05, arr[i]) * ph : sy(arr[i]);
+      d += `${d ? 'L' : 'M'}${sx(l).toFixed(1)},${v.toFixed(1)}`;
+    }
+    return close ? `${d}L${sx(x1).toFixed(1)},${py + ph}L${sx(x0).toFixed(1)},${py + ph}Z` : d;
+  };
+  const ticks = [];
+  for (let t = Math.ceil(x0 / 25) * 25; t <= x1; t += 25) {
+    ticks.push(`<line x1="${sx(t)}" x2="${sx(t)}" y1="${py}" y2="${py + ph}" class="grid"/><text x="${sx(t)}" y="${py + ph + 13}" class="t-axis" text-anchor="middle">${t}</text>`);
+  }
+  const dc = store.get(doc.cube.dichroicId);
+  const T = dc ?? new Float64Array(N).fill(1);
+  const name = dc ? store.display(doc.cube.dichroicId).title : 'no dichroic';
+  const pk = leak.peakNm && leak.peakNm >= x0 && leak.peakNm <= x1
+    ? `<line x1="${sx(leak.peakNm)}" x2="${sx(leak.peakNm)}" y1="${py}" y2="${py + ph}" class="leak-peak"/><text x="${sx(leak.peakNm) + 4}" y="${py + 26}" class="t-axis leak-peak-t">peak ${leak.peakNm} nm</text>` : '';
+  return `<g class="leak-panel" role="alert">
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" class="leak-body"/>
+    <text x="${x + 12}" y="${y + 19}" class="t-leak">⚠ WARNING — ${pct(leak.frac)} of excitation passes the cube dichroic</text>
+    <text x="${x + 12}" y="${y + 33}" class="t-axis">${esc(dc ? `cube dichroic ${name}` : 'no cube dichroic — nothing reaches the sample')}</text>
+    ${ticks.join('')}
+    <path d="${path(leak.arriving, true)}" class="leak-arriving"/>
+    <path d="${path(leak.passed, true)}" class="leak-passed"/>
+    <path d="${path(T, false, true)}" class="leak-T"/>
+    ${pk}
+    <g transform="translate(${x + w - 12},${y + h - 7})" text-anchor="end"><text class="t-axis"><tspan class="leg-arr">■</tspan> arriving  <tspan class="leg-pass">■</tspan> passes  <tspan class="leg-T">—</tspan> dichroic T</text></g>
+  </g>`;
+}
+
 // ------------------------------------------------------------------ cube presets button
 
 function cubeButton(cx, cy, current) {
@@ -370,7 +414,19 @@ export function renderDiagram(el, ctx, handlers) {
   });
   beams.push(beam(`M${JX},${JY} C${JX - 90},${JY} ${pos.exciter.x + 120},${pos.exciter.y} ${pos.exciter.x},${pos.exciter.y}`, 'source', srcTotal, { cls: 'guide' }));
   beams.push(beam(`M${pos.exciter.x},${pos.exciter.y} H${pos.cubeDichroic.x}`, 'ex:exciter', srcTotal));
-  beams.push(beam(`M${CX + 8},${pos.cubeDichroic.y} V${STAGE_Y + 6}`, 'ex:cubeDichroic', srcTotal));
+  // reflected excitation goes up to the sample only if any is reflected (empty dichroic: none)
+  if (steps['ex:cubeDichroic'] && integrate(steps['ex:cubeDichroic'].out) > 0) {
+    beams.push(beam(`M${CX + 8},${pos.cubeDichroic.y} V${STAGE_Y + 6}`, 'ex:cubeDichroic', srcTotal));
+  }
+  // excitation the dichroic transmits carries straight on to a beam dump at the cube wall
+  const leak = acq?.cubeLeak;
+  const dumpX = 562 + L.s;
+  if (leak && leak.frac > 0.001) {
+    const c = centroid(leak.passed);
+    const relL = srcTotal > 0 ? integrate(leak.passed) / srcTotal : 0;
+    beams.push(`<path d="M${CX},${pos.cubeDichroic.y} H${dumpX + 6}" class="beam leak" stroke="${c ? wavelengthCSS(c) : '#888'}" stroke-opacity="${Math.max(0.25, Math.min(1, 0.2 + Math.sqrt(relL))).toFixed(2)}"><title>${pct(leak.frac)} of the excitation passes through the cube dichroic (lost, and can reach the cameras as background)</title></path>`);
+  }
+  beams.push(`<g class="beam-dump"><title>Beam dump: excitation transmitted by the cube dichroic</title><rect x="${dumpX - 8}" y="${pos.cubeDichroic.y - 16}" width="12" height="32" rx="2"/><path d="M${dumpX - 8},${pos.cubeDichroic.y - 8} l12,-8 M${dumpX - 8},${pos.cubeDichroic.y + 4} l12,-8 M${dumpX - 8},${pos.cubeDichroic.y + 16} l12,-8"/></g>`);
   beams.push(beam(`M${CX - 8},${STAGE_Y + 6} V${pos.cubeDichroic.y}`, 'sample', emTotal, { em: 'sample' }));
   beams.push(beam(`M${CX - 8},${pos.cubeDichroic.y} V${pos.emitter.y}`, 'em:cubeDichroic', emTotal, { em: 'em:cubeDichroic' }));
   beams.push(beam(`M${pos.emitter.x},${pos.emitter.y} V${pos.gemini.y} H${pos.gemini.x}`, 'emitter', emTotal, { em: 'emitter' }));
@@ -481,6 +537,13 @@ export function renderDiagram(el, ctx, handlers) {
       <text x="${CX}" y="${STAGE_Y - 96}" class="t-title t-sample" text-anchor="middle">${names.length ? esc(names.slice(0, 4).join(' · ')) + (names.length > 4 ? ` +${names.length - 4}` : '') : 'Sample — click to add fluorophores'}</text>
     </g>
     ${exPanel(L.EX.x, L.EX.y, L.EX.w, L.EX.h, { acq, store, doc, colors: ctx.fluorColors, exMin: ctx.exMin })}
+    ${leak && leak.frac * 100 >= ctx.leakThreshold && integrate(leak.arriving) > 0 ? leakPanel(leak, doc, store) : ''}
+    <foreignObject x="${910 + L.s}" y="596" width="${Math.max(150, 175 + L.R - L.s)}" height="58" class="leak-ctl">
+      <div xmlns="http://www.w3.org/1999/xhtml" class="leak-slider" title="Show the cube-dichroic WARNING when at least this much excitation passes through the dichroic">
+        <label>Leak warning ≥ <b class="leak-val">${ctx.leakThreshold}%</b></label>
+        <input type="range" min="0" max="25" step="1" value="${ctx.leakThreshold}" aria-label="Cube dichroic leak warning threshold (percent)">
+      </div>
+    </foreignObject>
     ${nodes}
     ${toggles}
     ${camPanel('B', ctx, store)}
@@ -498,6 +561,9 @@ export function renderDiagram(el, ctx, handlers) {
   act('[data-exmin]', () => handlers.onToggleExMin());
   act('[data-cammin]', (g) => handlers.onToggleCamMin(g.dataset.cammin));
   act('[data-cube]', (g) => handlers.onCubeMenu(g.getBoundingClientRect()));
+  const slider = el.querySelector('.leak-slider input');
+  slider?.addEventListener('input', () => { el.querySelector('.leak-val').textContent = `${slider.value}%`; });
+  slider?.addEventListener('change', () => handlers.onLeakThreshold(+slider.value));
   el.querySelectorAll('.beam-hit').forEach((p) => {
     p.addEventListener('mousemove', (e) => handlers.onBeamHover(p.dataset.em, p.dataset.label, e));
     p.addEventListener('mouseleave', () => handlers.onBeamHover(null));

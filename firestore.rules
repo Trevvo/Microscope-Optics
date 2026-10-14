@@ -2,8 +2,8 @@ rules_version = '2';
 
 // Everything requires a signed-in user. Accounts are created by hand in the
 // Firebase console (self sign-up disabled), so "signed in" == "lab member".
-// Documents are never deleted: configs are archived, revisions and custom
-// spectra are append-only, so vandalism can always be undone from history.
+// Configs can be deleted (with their history), except the shared TEST config.
+// Revisions can't be edited after creation; custom spectra are append-only.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -17,7 +17,7 @@ service cloud.firestore {
         && d.name is string && d.name.size() > 0 && d.name.size() <= 120
         && d.description is string && d.description.size() <= 2000
         && d.schemaVersion is int
-        && d.archived is bool
+        && (!('archived' in d) || d.archived is bool)
         && d.leds is list && d.leds.size() <= 12
         && d.cube is map
         && d.splitter is map
@@ -30,16 +30,19 @@ service cloud.firestore {
     match /configs/{configId} {
       allow read: if signedIn();
       allow create, update: if signedIn() && validConfig(request.resource.data);
-      allow delete: if false;
+      allow delete: if signedIn() && configId != 'TEST';
 
       match /revisions/{revId} {
         allow read: if signedIn();
         allow create: if signedIn()
-          && request.resource.data.keys().hasOnly(['snapshot', 'label', 'savedBy', 'savedAt'])
+          && request.resource.data.keys().hasOnly(['snapshot', 'label', 'kind', 'savedBy', 'savedAt'])
           && request.resource.data.snapshot is map
           && request.resource.data.label is string && request.resource.data.label.size() <= 200
+          && (!('kind' in request.resource.data) || request.resource.data.kind in ['manual', 'save'])
           && request.resource.data.savedAt == request.time;
-        allow update, delete: if false;
+        allow update: if false;
+        // only used when deleting the whole config (the TEST config can't be deleted)
+        allow delete: if signedIn() && configId != 'TEST';
       }
     }
 

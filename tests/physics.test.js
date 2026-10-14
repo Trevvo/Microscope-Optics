@@ -5,6 +5,10 @@ import { simulate } from '../src/physics/simulate.js';
 const gauss = (mu, sd) => Float64Array.from(LAMBDA, (l) => Math.exp(-0.5 * ((l - mu) / sd) ** 2));
 const box = (lo, hi) => Float64Array.from(LAMBDA, (l) => (l >= lo && l <= hi ? 1 : 0));
 const longpass = (edge) => Float64Array.from(LAMBDA, (l) => (l >= edge ? 1 : 0));
+// cube dichroics: an empty slot now reflects nothing, so excitation tests need one explicitly
+const MIRROR = { dichroic: longpass(2000) }; // T = 0 everywhere: reflects all excitation (blocks emission)
+// reflects the two test LED bands (475, 555 nm) and transmits everything else
+const NOTCH = { dichroic: Float64Array.from(LAMBDA, (l) => (Math.abs(l - 475) < 20 || Math.abs(l - 555) < 20 ? 0 : 1)) };
 
 const green = { key: 'g', name: 'G', ec: 50000, qy: 0.6, ex: gauss(488, 15), em: gauss(510, 15) };
 const red = { key: 'r', name: 'R', ec: 70000, qy: 0.2, ex: gauss(587, 15), em: gauss(610, 15) };
@@ -48,7 +52,7 @@ describe('analytic box-filter case', () => {
   it('excitation overlap matches the closed form for Gaussian × Gaussian', () => {
     // LED N(475,10) photons ≈ power·λ/500; fluor ex peak-normalized N(488,15).
     // ∫ N(x;475,10)·exp(-(x-488)²/(2·15²)) dx = 15/√(10²+15²) · exp(-(13)²/(2(10²+15²)))
-    const r = simulate({ leds: [leds[0]], fluors: [green], acquisitions: [{ ledsOn: ['cyan'] }] });
+    const r = simulate({ leds: [leds[0]], fluors: [green], cube: MIRROR, acquisitions: [{ ledsOn: ['cyan'] }] });
     const s2 = 10 ** 2 + 15 ** 2;
     const expected = (15 / Math.sqrt(s2)) * Math.exp(-(13 ** 2) / (2 * s2));
     // photon weighting λ/500 near 475–488 nm is ≈ 0.96; allow for it.
@@ -60,7 +64,7 @@ describe('analytic box-filter case', () => {
 
 describe('linearity and normalization', () => {
   const base = {
-    leds, splitter: { dichroic: longpass(560) },
+    leds, cube: NOTCH, splitter: { dichroic: longpass(560) },
     acquisitions: [{ name: 'c', ledsOn: ['cyan'] }, { name: 'g', ledsOn: ['green'] }],
   };
 
@@ -132,7 +136,7 @@ describe('per-fluorophore emission decomposition (beam hover)', () => {
   });
 
   it('LED lines sit at the filtered LED peak and EC/QY default to 1', () => {
-    const r = simulate({ leds, fluors: [{ key: 'x', name: 'X', ex: green.ex, em: green.em }], acquisitions: [{ ledsOn: ['cyan'] }] });
+    const r = simulate({ leds, cube: NOTCH, fluors: [{ key: 'x', name: 'X', ex: green.ex, em: green.em }], acquisitions: [{ ledsOn: ['cyan'] }] });
     expect(r.acquisitions[0].ledLines).toHaveLength(1);
     expect(Math.abs(r.acquisitions[0].ledLines[0].lambda - 476)).toBeLessThan(4); // N(475,10) × λ photon weighting
     expect(r.fluors[0].ec).toBe(1);
@@ -145,8 +149,35 @@ describe('excitation normalisation window', () => {
     // visible band at 530 nm (height 0.4) plus a UV band at 320 nm (height 1)
     const ex = Float64Array.from(LAMBDA, (l) => 0.4 * Math.exp(-0.5 * ((l - 530) / 15) ** 2) + Math.exp(-0.5 * ((l - 320) / 8) ** 2));
     const vis = Float64Array.from(LAMBDA, (l) => Math.exp(-0.5 * ((l - 530) / 15) ** 2));
-    const a = simulate({ leds: [{ key: 'g', label: 'G', spectrum: gauss(530, 10), paddle: null }], fluors: [{ key: 'x', name: 'x', ex, em: gauss(560, 15) }], acquisitions: [{ ledsOn: ['g'] }] });
-    const b = simulate({ leds: [{ key: 'g', label: 'G', spectrum: gauss(530, 10), paddle: null }], fluors: [{ key: 'x', name: 'x', ex: vis, em: gauss(560, 15) }], acquisitions: [{ ledsOn: ['g'] }] });
+    const a = simulate({ leds: [{ key: 'g', label: 'G', spectrum: gauss(530, 10), paddle: null }], cube: MIRROR, fluors: [{ key: 'x', name: 'x', ex, em: gauss(560, 15) }], acquisitions: [{ ledsOn: ['g'] }] });
+    const b = simulate({ leds: [{ key: 'g', label: 'G', spectrum: gauss(530, 10), paddle: null }], cube: MIRROR, fluors: [{ key: 'x', name: 'x', ex: vis, em: gauss(560, 15) }], acquisitions: [{ ledsOn: ['g'] }] });
+    expect(b.fluors[0].exEff[0]).toBeGreaterThan(0.3); // guard: excitation actually reaches the sample
     expect(a.fluors[0].exEff[0]).toBeCloseTo(b.fluors[0].exEff[0], 3);
+  });
+});
+
+describe('cube dichroic and excitation', () => {
+  it('an empty cube dichroic sends excitation straight through: nothing reaches the sample', () => {
+    const r = simulate({ leds, fluors: [green], acquisitions: [{ ledsOn: ['cyan'] }] });
+    const a = r.acquisitions[0];
+    expect(integrate(a.excitation)).toBe(0);
+    expect(r.signal[0].every((v) => v === 0)).toBe(true);
+    expect(a.cubeLeak.frac).toBeCloseTo(1, 9);
+  });
+
+  it('cubeLeak is the fraction of excitation the dichroic transmits', () => {
+    // LED N(475,10); a longpass dichroic at 475 transmits the upper half
+    const r = simulate({ leds: [leds[0]], fluors: [green], cube: { dichroic: longpass(475) }, acquisitions: [{ ledsOn: ['cyan'] }] });
+    const leak = r.acquisitions[0].cubeLeak;
+    expect(leak.frac).toBeGreaterThan(0.5); // λ-weighted photons skew slightly red; inclusive edge adds half a bin
+    expect(leak.frac).toBeLessThan(0.56);
+    expect(leak.peakNm).toBeGreaterThanOrEqual(475);
+    // reflected + transmitted = arriving (lossless)
+    expect(integrate(r.acquisitions[0].excitation) + integrate(leak.passed)).toBeCloseTo(integrate(leak.arriving), 9);
+  });
+
+  it('a well-matched dichroic leaks almost nothing', () => {
+    const r = simulate({ leds: [leds[0]], fluors: [green], cube: { dichroic: longpass(520) }, acquisitions: [{ ledsOn: ['cyan'] }] });
+    expect(r.acquisitions[0].cubeLeak.frac).toBeLessThan(0.001);
   });
 });

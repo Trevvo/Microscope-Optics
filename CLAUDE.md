@@ -24,7 +24,13 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
 - **Spectra store:** `src/data/spectraStore.js` loads `index.json` and lazily fetches `s/{id}.json` (`{v: ints/1e5}`).
   - Custom spectra have IDs `c:<id>`.
   - `display(id)` returns `{title: label || name, brand}`.
-- **Main:** `src/main.js` holds all state and the render loop (rAF). Every doc edit goes through `edit()` (re-render) or `editQuiet()` (no re-render, for text inputs). It autosaves after 1.2 s of inactivity, and at least every 5 s.
+- **Main:** `src/main.js` holds all state and the render loop (rAF). Every doc edit goes through `edit()` (re-render) or `editQuiet()` (no re-render, for text inputs).
+  - **There is no autosave.** Edits only mark the config dirty. `save()` runs on the Save button or Ctrl/⌘+S.
+  - Switching config or signing out with unsaved changes shows `confirmUnsaved()` (Save / Discard / Cancel).
+  - Each successful Save writes a revision with `kind: 'save'`. "Save version…" writes `kind: 'manual'`.
+  - Older revisions have no `kind`; `revisionKind()` in schema.js sorts them by label.
+- **TEST:** the doc ID is `TEST` (`TEST_ID` in schema.js). It's created on login by `backend.ensureConfig` if missing, and every session lands on it. It's pinned first in the dropdown above a separator. It can't be renamed (UI) or deleted (UI and rules).
+- **Delete:** `backend.deleteConfig` deletes the revisions in batches, then the config. It's behind a two-step confirm. Archive is gone; `archived` stays an optional field so old documents validate.
 - **Concurrent editing** (verified live with two sessions):
   - `backend.saveConfig(id, local, base)` runs a Firestore **transaction**. It reads the server copy, calls `merge3(base, local, server)` from `src/merge.js`, and writes the merged document, or writes nothing if there's a conflict.
   - `state.base` is the last synced content; update it on every apply or save.
@@ -87,6 +93,9 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
 
 ## Decisions the user made (don't silently revert)
 - EC and QY are **not used**: all fluorophores are equally bright at their peak. `simulate` defaults EC and QY to 1.
+- **Cube dichroic:** an empty slot reflects nothing, so excitation goes straight through and never reaches the sample. `simulate` returns `acquisitions[i].cubeLeak {passed, arriving, frac, peakNm}`, the excitation the dichroic transmits.
+  - The diagram draws that light continuing to a beam dump.
+  - It shows the WARNING panel (`leakPanel`) above the cell when `frac` ≥ the slider threshold. The threshold is a per-browser pref (`leakThreshold`), default 5%, range 0–25%.
 - Excitation spectra are normalized by their maximum **within 360–700 nm** (`normalizePeakInRange`, `EX_NORM_RANGE`), both in the model and in every plot. Curves may exceed 1 outside that window; the diagram clips them.
 - Camera graphs show one bar per included fluorophore, giving the fraction of its emitted light that reaches that camera (`result.fluors[i].collection[cam]`). They deliberately do not show a composition split.
 - Equal integrated power per LED. Lumencor's absolute powers are known (about 720/770/600/1680/430/360 mW for U/B/C/G/R/N) but deliberately unused.
@@ -103,5 +112,6 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
   - A hash-only `goto` doesn't reload the page.
   - The `beforeunload` prompt (shown while there are unsaved edits) blocks `browser.close()`, so wait longer than 1.5 s after an edit before closing.
 - The Firestore emulator needs Java, which isn't installed here. To test against the live project, run `npm run dev`; `localhost` is authorized by default in Firebase Auth. Use separate `browser.createBrowserContext()` contexts for multi-user tests, and restore any data you change.
+- **Rules and code ship together:** when a change needs new Firestore rules (new fields, deletes), deploy the rules *before* pushing the code, or old rules will reject the new writes.
 - **Live deployment:** https://trevvo.github.io/Microscope-Optics/ (GitHub repo `Trevvo/Microscope-Optics`; Firebase project `microscope-optics`). Pushing to `main` redeploys.
 - FPbase's data license was never confirmed (see `public/data/fpbase/ATTRIBUTION.md`).

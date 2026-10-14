@@ -47,7 +47,7 @@ export function resolve(doc, store) {
 export function warnings(doc, store, result, skipped) {
   const w = [];
   for (const s of skipped) w.push({ level: 'warn', text: `${s.name} is excluded from readouts: ${s.reason}.` });
-  if (!doc.cube.dichroicId) w.push({ level: 'info', text: 'No cube dichroic selected: it is treated as reflecting all excitation and transmitting all emission (R = T = 1), which is unphysical. Choose your cube dichroic.' });
+  if (!doc.cube.dichroicId) w.push({ level: 'warn', text: 'No cube dichroic: the excitation light passes straight through the cube and never reaches the sample, so nothing is excited. Choose a cube dichroic.' });
   if (!doc.splitter.dichroicId) w.push({ level: 'info', text: `No Gemini dichroic: all emission goes to Camera ${doc.splitter.bypassTo === 'A' ? 1 : 2} (bypass).` });
   doc.acquisitions.forEach((a, ai) => {
     if (!a.ledsOn.length) w.push({ level: 'warn', text: `${a.name || `Acq ${ai + 1}`} has no LEDs switched on.` });

@@ -4,6 +4,17 @@
 
 export const SCHEMA_VERSION = 2;
 
+// The shared, undeletable sandbox every session starts on (fixed Firestore document id).
+export const TEST_ID = 'TEST';
+
+/** History tab for a revision. New ones carry `kind`; older ones (before explicit saving)
+ *  are classified by label: automatic snapshots → 'save', anything labelled by a person → 'manual'. */
+export function revisionKind(r) {
+  if (r.kind === 'manual' || r.kind === 'save') return r.kind;
+  const label = r.label ?? '';
+  return label === 'autosnapshot' || /^before .*edits$/.test(label) ? 'save' : 'manual';
+}
+
 // SPECTRA X sources (current model, manual 57-10039), in wavelength order, seeded with their
 // *unfiltered* outputs. FPbase's "Spectra X23 *" spectra match Lumencor's published unfiltered
 // curves (scripts/verify_spectrax_unfiltered.py); the older "SpectraX *" entries are filtered outputs.

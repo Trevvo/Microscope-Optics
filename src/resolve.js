@@ -2,7 +2,7 @@
 // collects warnings about things the physics silently assumes.
 
 import { LAMBDA, N } from './physics/grid.js';
-import { referencedIds } from './schema.js';
+import { referencedIds, fretOf } from './schema.js';
 
 export function idsToLoad(doc, store) {
   const fl = doc.fluors.flatMap((f) => {
@@ -39,6 +39,12 @@ export function resolve(doc, store) {
       },
       fluors,
       acquisitions: doc.acquisitions,
+      fret: (() => {
+        const f = fretOf(doc);
+        const ok = f.on && f.donor && f.acceptor && f.donor !== f.acceptor
+          && fluors.some((x) => x.key === f.donor) && fluors.some((x) => x.key === f.acceptor);
+        return ok ? { donor: f.donor, acceptor: f.acceptor, E: f.efficiency } : null;
+      })(),
     },
     skipped,
   };
@@ -47,6 +53,8 @@ export function resolve(doc, store) {
 export function warnings(doc, store, result, skipped) {
   const w = [];
   for (const s of skipped) w.push({ level: 'warn', text: `${s.name} is excluded from readouts: ${s.reason}.` });
+  const fr = fretOf(doc);
+  if (fr.on && !result?.fret) w.push({ level: 'warn', text: 'FRET is on but not applied: choose a donor and a different acceptor, both enabled in the sample.' });
   if (!doc.cube.dichroicId) w.push({ level: 'warn', text: 'No cube dichroic: the excitation light passes straight through the cube and never reaches the sample, so nothing is excited. Choose a cube dichroic.' });
   if (!doc.splitter.dichroicId) w.push({ level: 'info', text: `No Gemini dichroic: all emission goes to Camera ${doc.splitter.bypassTo === 'A' ? 1 : 2} (bypass).` });
   doc.acquisitions.forEach((a, ai) => {

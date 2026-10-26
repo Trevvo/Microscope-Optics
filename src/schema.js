@@ -4,6 +4,11 @@
 
 export const SCHEMA_VERSION = 2;
 
+// FRET settings. Stored only once someone uses the FRET controls, so configs without FRET keep
+// their old shape. efficiency is 0–1.
+export const FRET_DEFAULT = { on: false, donor: null, acceptor: null, efficiency: 0.5 };
+export const fretOf = (doc) => ({ ...FRET_DEFAULT, ...(doc?.fret ?? {}) });
+
 // The shared, undeletable sandbox every session starts on (fixed Firestore document id).
 export const TEST_ID = 'TEST';
 

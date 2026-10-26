@@ -181,3 +181,40 @@ describe('cube dichroic and excitation', () => {
     expect(r.acquisitions[0].cubeLeak.frac).toBeLessThan(0.001);
   });
 });
+
+describe('FRET', () => {
+  // donor = green, acceptor = red; LED excites both (cyan + green on), dichroic passes emission
+  const base = { leds, cube: NOTCH, acquisitions: [{ ledsOn: ['cyan', 'green'] }] };
+  const emit = (r, key) => r.acquisitions[0].perFluor.find((p) => p.key === key);
+
+  it('E = 0 reproduces the no-FRET result exactly', () => {
+    const a = simulate({ ...base, fluors: [green, red] });
+    const b = simulate({ ...base, fluors: [green, red], fret: { donor: 'g', acceptor: 'r', E: 0 } });
+    expect(b.signal).toEqual(a.signal);
+  });
+
+  it('E = 1 removes donor emission and gives its excitation to the acceptor', () => {
+    const r = simulate({ ...base, fluors: [{ ...green, qy: 1 }, { ...red, qy: 1 }], fret: { donor: 'g', acceptor: 'r', E: 1 } });
+    const d = emit(r, 'g'), a = emit(r, 'r');
+    expect(d.emitted).toBe(0);
+    expect(a.emitted).toBeCloseTo(a.absorbed + d.absorbed, 9);
+  });
+
+  it('conserves photons with QY = 1, and the acceptor gains E·A_D', () => {
+    const fl = [{ ...green, qy: 1 }, { ...red, qy: 1 }];
+    const r = simulate({ ...base, fluors: fl, fret: { donor: 'g', acceptor: 'r', E: 0.4 } });
+    const d = emit(r, 'g'), a = emit(r, 'r');
+    expect(d.emitted + a.emitted).toBeCloseTo(d.emitted0 + a.emitted0, 9);
+    expect(a.emitted - a.emitted0).toBeCloseTo(0.4 * d.absorbed, 9);
+    expect(d.emitted).toBeCloseTo(0.6 * d.emitted0, 9);
+    expect(r.fret).toEqual({ donor: 'g', acceptor: 'r', E: 0.4 });
+  });
+
+  it('ignores FRET when the donor and acceptor are the same or missing', () => {
+    const a = simulate({ ...base, fluors: [green, red] });
+    expect(simulate({ ...base, fluors: [green, red], fret: { donor: 'g', acceptor: 'g', E: 0.5 } }).signal).toEqual(a.signal);
+    const m = simulate({ ...base, fluors: [green, red], fret: { donor: 'g', acceptor: 'zz', E: 0.5 } });
+    expect(m.signal).toEqual(a.signal);
+    expect(m.fret).toBeNull();
+  });
+});

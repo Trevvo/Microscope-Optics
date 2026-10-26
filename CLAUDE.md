@@ -96,6 +96,11 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
 - **Cube dichroic:** an empty slot reflects nothing, so excitation goes straight through and never reaches the sample. `simulate` returns `acquisitions[i].cubeLeak {passed, arriving, frac, peakNm}`, the excitation the dichroic transmits.
   - The diagram draws that light continuing to a beam dump.
   - It shows the WARNING panel (`leakPanel`) above the cell when `frac` ≥ the slider threshold. The threshold is a per-browser pref (`leakThreshold`), default 5%, range 0–25%.
+- **FRET:** the optional config field `fret {on, donor, acceptor, efficiency 0–1}` is written only once someone uses the controls; `fretOf()` in schema.js supplies the defaults.
+  - Model (`simulate`, `input.fret`): the donor emits (1 − E)·A_D·Q_D, and the acceptor emits (A_A + E·A_D)·Q_A. This is donor quenching plus sensitized emission (Lakowicz 2006 ch. 13; Zal & Gascoigne 2004, Biophys J 86:3923). It assumes 1:1 stoichiometry.
+  - `perFluor[i].emitted` and `emitted0` give the photon counts with and without FRET; `emittedBy` and `emittedByNoFret` give the matching spectra. `signal` uses `emitted`. The `collection` bars are unchanged by FRET.
+  - UI: the switch and donor/acceptor selects sit above the cell, and the vertical E bar sits left of the cell (`fretControls`). Camera graphs draw the no-FRET light as a grey outline (`.cam-orig`).
+  - Rules allow `fret` as an optional map.
 - Excitation spectra are normalized by their maximum **within 360–700 nm** (`normalizePeakInRange`, `EX_NORM_RANGE`), both in the model and in every plot. Curves may exceed 1 outside that window; the diagram clips them.
 - Camera graphs show one bar per included fluorophore, giving the fraction of its emitted light that reaches that camera (`result.fluors[i].collection[cam]`). They deliberately do not show a composition split.
 - Equal integrated power per LED. Lumencor's absolute powers are known (about 720/770/600/1680/430/360 mW for U/B/C/G/R/N) but deliberately unused.

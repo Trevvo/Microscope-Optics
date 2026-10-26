@@ -13,11 +13,12 @@ service cloud.firestore {
 
     function validConfig(d) {
       return d.keys().hasOnly(['name', 'description', 'schemaVersion', 'archived', 'leds', 'cube', 'splitter',
-                               'fluors', 'acquisitions', 'updatedAt', 'updatedBy', 'updatedSession'])
+                               'fluors', 'acquisitions', 'fret', 'updatedAt', 'updatedBy', 'updatedSession'])
         && d.name is string && d.name.size() > 0 && d.name.size() <= 120
         && d.description is string && d.description.size() <= 2000
         && d.schemaVersion is int
         && (!('archived' in d) || d.archived is bool)
+        && (!('fret' in d) || (d.fret is map && d.fret.keys().hasOnly(['on', 'donor', 'acceptor', 'efficiency'])))
         && d.leds is list && d.leds.size() <= 12
         && d.cube is map
         && d.splitter is map

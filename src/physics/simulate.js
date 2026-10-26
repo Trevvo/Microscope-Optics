@@ -62,9 +62,14 @@ function detectionPaths(input) {
  *   splitter: {dichroic, bypassTo: 'A'|'B', armA: {filter, camera}, armB: {filter, camera}}
  *   fluors: [{key, name, ex, em, ec?, qy?}]
  *   acquisitions: [{name, ledsOn: [ledKey]}]
+ *   fret: {donor, acceptor, E} | null — FRET between two of the fluorophores (keys), E in 0–1.
+ *     Donor emission falls to (1 − E) of its value (E = 1 − F_DA/F_D, Lakowicz 2006 ch. 13);
+ *     the transferred excitation E·A_D is emitted by the acceptor with its own QY
+ *     (sensitized emission; Zal & Gascoigne 2004, Biophys J 86:3923). 1:1 stoichiometry.
  */
 export function simulate(input) {
   const { leds = [], cube = {}, fluors = [], acquisitions = [] } = input;
+  const fret = input.fret && input.fret.donor !== input.fret.acceptor ? input.fret : null;
   const det = detectionPaths(input);
   // An empty dichroic slot reflects nothing: excitation passes straight through and never
   // reaches the sample (emission still passes, T = 1).
@@ -136,13 +141,26 @@ export function simulate(input) {
       };
     });
 
-    // Emitted light at the sample, per fluorophore and summed.
-    const emittedBy = F.map((f, i) => {
-      const k = perFluor[i].absorbed * f.qy;
+    // Emitted photons per fluorophore, without FRET (amount0) and with it (amount).
+    const amount0 = F.map((f, i) => perFluor[i].absorbed * f.qy);
+    const amount = [...amount0];
+    const di = fret ? F.findIndex((f) => f.key === fret.donor) : -1;
+    const ai2 = fret ? F.findIndex((f) => f.key === fret.acceptor) : -1;
+    if (di >= 0 && ai2 >= 0) {
+      const E = Math.max(0, Math.min(1, fret.E));
+      const transferred = E * perFluor[di].absorbed;
+      amount[di] = (perFluor[di].absorbed - transferred) * F[di].qy;
+      amount[ai2] = (perFluor[ai2].absorbed + transferred) * F[ai2].qy;
+    }
+    perFluor.forEach((p, i) => { p.emitted = amount[i]; p.emitted0 = amount0[i]; });
+    const spectraFor = (amt) => F.map((f, i) => {
       const e = new Float64Array(N);
-      for (let j = 0; j < N; j++) e[j] = k * f.emN[j];
+      for (let j = 0; j < N; j++) e[j] = amt[i] * f.emN[j];
       return { key: f.key, name: f.name, spectrum: e };
     });
+    // Emitted light at the sample, per fluorophore (FRET-adjusted) and summed.
+    const emittedBy = spectraFor(amount);
+    const emittedByNoFret = di >= 0 && ai2 >= 0 ? spectraFor(amount0) : emittedBy;
     const emitted = zeros();
     for (const e of emittedBy) for (let j = 0; j < N; j++) emitted[j] += e.spectrum[j];
     const afterCubeDc = mul(emitted, cube.dichroic);
@@ -182,12 +200,12 @@ export function simulate(input) {
     }
 
     for (const c of det.active) channels.push({ acq: ai, cam: c, label: `${acq.name || `Acq ${ai + 1}`} · Camera ${c === 'A' ? 1 : 2}` });
-    return { name: acq.name, ledsOn: on.map((l) => l.key), perFluor, steps, leakage, excitation: atSample, ledLines, emittedBy, cubeLeak };
+    return { name: acq.name, ledsOn: on.map((l) => l.key), perFluor, steps, leakage, excitation: atSample, ledLines, emittedBy, emittedByNoFret, cubeLeak };
   });
 
-  // signal[f][ch] = absorbed · QY · collection
+  // signal[f][ch] = emitted photons (absorbed · QY, FRET-adjusted) · collection
   const signal = F.map((f, fi) =>
-    channels.map((ch) => acqOut[ch.acq].perFluor[fi].absorbed * f.qy * f.collection[ch.cam]),
+    channels.map((ch) => acqOut[ch.acq].perFluor[fi].emitted * f.collection[ch.cam]),
   );
   const maxCell = Math.max(0, ...signal.flat());
   const colSum = channels.map((_, ci) => signal.reduce((s, row) => s + row[ci], 0));
@@ -212,5 +230,6 @@ export function simulate(input) {
     detection: det.cams,
     activeCams: det.active,
     cumulative: cum,
+    fret: fret && F.some((f) => f.key === fret.donor) && F.some((f) => f.key === fret.acceptor) ? { ...fret } : null,
   };
 }

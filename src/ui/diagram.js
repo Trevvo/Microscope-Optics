@@ -7,6 +7,7 @@
 import { centroid, passbandCenter, wavelengthCSS } from './color.js';
 import { integrate, LAMBDA, N, LMIN, EX_NORM_RANGE } from '../physics/grid.js';
 import { xRange } from './plots.js';
+import { fretOf } from '../schema.js';
 
 // Layout is sized for laptop screens: a ~1.8:1 drawing that scales up to fill the stage.
 // The drawing is VIEW_H tall; its width follows the stage's aspect ratio (≥ BASE_W) so it
@@ -230,7 +231,8 @@ function camPanel(cam, ctx, store) {
   const best = Math.max(0, ...totals);
   const tot = ci >= 0 ? totals[ci] : 0;
   const rel = best > 0 ? (100 * tot) / best : 0;
-  const sig = ci < 0 ? 'no light' : tot > 0 ? `signal ${fmt1(rel)}${rel < 10 ? ' · weak' : ''}` : 'no signal';
+  const fretE = r?.fret ? Math.round(r.fret.E * 100) : null;
+  const sig = (ci < 0 ? 'no light' : tot > 0 ? `signal ${fmt1(rel)}${rel < 10 ? ' · weak' : ''}` : 'no signal') + (fretE != null && ci >= 0 ? ` · FRET ${fretE}%` : '');
   const head = `<g class="expanel-head" data-cammin="${cam}" role="button" tabindex="0" aria-label="${min ? 'Show' : 'Minimise'} ${CAM_NAME[cam]} graph">
       <title>Light reaching ${CAM_NAME[cam]}. Signal is relative to the brightest camera × acquisition.</title>
       <rect x="${x}" y="${y}" width="${min ? 250 : w}" height="28" rx="7" class="panel-head"/>
@@ -256,9 +258,12 @@ function camPanel(cam, ctx, store) {
   }
   const sum = new Float64Array(N);
   for (const p of parts) for (let i = 0; i < N; i++) sum[i] += p.s[i];
+  // with FRET on, the light this camera would get without FRET is drawn grey behind
+  const sum0 = r?.fret && acq && cum && ci >= 0 ? new Float64Array(N) : null;
+  if (sum0) for (const e of acq.emittedByNoFret) for (let i = 0; i < N; i++) sum0[i] += e.spectrum[i] * cum[i];
   let peak = 0;
-  for (let i = 0; i < N; i++) if (sum[i] > peak) peak = sum[i];
-  const emitted = acq ? acq.emittedBy.map((e) => ({ data: e.spectrum })) : [];
+  for (let i = 0; i < N; i++) peak = Math.max(peak, sum[i], sum0 ? sum0[i] : 0);
+  const emitted = acq ? [...acq.emittedBy, ...(sum0 ? acq.emittedByNoFret : [])].map((e) => ({ data: e.spectrum })) : [];
   const [x0, x1] = emitted.length ? xRange(emitted) : [450, 750];
   const sx = (l) => px + ((l - x0) / (x1 - x0)) * pw;
   const sy = (v) => py + ph - (peak > 0 ? v / peak : 0) * ph;
@@ -277,7 +282,8 @@ function camPanel(cam, ctx, store) {
   }
   const shown = parts.filter((p) => p.t > 0).sort((a, b) => b.t - a.t);
   const areas = shown.map((p) => `<path d="${path(p.s, true)}" fill="${ctx.colors[p.key]}" fill-opacity="0.4" stroke="${ctx.colors[p.key]}" stroke-width="1.6"/>`).join('');
-  const total = shown.length > 1 ? `<path d="${path(sum)}" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="1.3"/>` : '';
+  const total = shown.length > 1 || sum0 ? `<path d="${path(sum)}" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="1.3"/>` : '';
+  const orig = sum0 ? `<path d="${path(sum0, true)}" class="cam-orig"><title>Light without FRET</title></path>` : '';
   // one bar per fluorophore: the fraction of its emitted light that reaches this camera
   const fls = r?.fluors ?? [];
   const barTop = py + ph + 36;
@@ -298,7 +304,7 @@ function camPanel(cam, ctx, store) {
     <g class="expanel campanel">
       <rect x="${x}" y="${y + 28}" width="${w}" height="${h - 28}" class="panel-body"/>
       <text x="${x + 12}" y="${y + 45}" class="t-brand">${esc(short(model, Math.floor(w / 6.4)))}${qe != null && camId && ci >= 0 ? ` · ${pct(qe)} through QE` : ''}</text>
-      ${ticks.join('')}${areas}${total}
+      ${ticks.join('')}${orig}${areas}${total}
       ${empty ? `<text x="${x + w / 2}" y="${py + ph / 2}" class="t-sub" text-anchor="middle">${esc(empty)}</text>` : ''}
       ${fls.length ? `<text x="${px}" y="${barTop - 7}" class="t-axis">share of each fluorophore's emitted light reaching ${CAM_NAME[cam]}</text>` : ''}
       ${bars}
@@ -323,8 +329,8 @@ function cameraGlyph(x, y, face, set) {
 /** WARNING above the cell: excitation arriving at the cube dichroic (grey), the dichroic's
  *  transmission (white), and the part that passes straight through instead of reflecting (red). */
 function leakPanel(leak, doc, store) {
-  const x = 404 + L.s, y = 8, w = 424, h = 150;
-  const px = x + 14, pw = w - 28, py = y + 40, ph = h - 80;
+  const x = 404 + L.s, y = 4, w = 424, h = 104;
+  const px = x + 14, pw = w - 28, py = y + 36, ph = h - 62;
   const [x0, x1] = xRange([{ data: leak.arriving }]);
   const sx = (l) => px + ((l - x0) / (x1 - x0)) * pw;
   let m = 0;
@@ -342,24 +348,53 @@ function leakPanel(leak, doc, store) {
   };
   const ticks = [];
   for (let t = Math.ceil(x0 / 25) * 25; t <= x1; t += 25) {
-    ticks.push(`<line x1="${sx(t)}" x2="${sx(t)}" y1="${py}" y2="${py + ph}" class="grid"/><text x="${sx(t)}" y="${py + ph + 13}" class="t-axis" text-anchor="middle">${t}</text>`);
+    ticks.push(`<line x1="${sx(t)}" x2="${sx(t)}" y1="${py}" y2="${py + ph}" class="grid"/><text x="${sx(t)}" y="${py + ph + 12}" class="t-axis" text-anchor="middle">${t}</text>`);
   }
   const dc = store.get(doc.cube.dichroicId);
   const T = dc ?? new Float64Array(N).fill(1);
   const name = dc ? store.display(doc.cube.dichroicId).title : 'no dichroic';
   const pk = leak.peakNm && leak.peakNm >= x0 && leak.peakNm <= x1
-    ? `<line x1="${sx(leak.peakNm)}" x2="${sx(leak.peakNm)}" y1="${py}" y2="${py + ph}" class="leak-peak"/><text x="${sx(leak.peakNm) + 4}" y="${py + 26}" class="t-axis leak-peak-t">peak ${leak.peakNm} nm</text>` : '';
+    ? `<line x1="${sx(leak.peakNm)}" x2="${sx(leak.peakNm)}" y1="${py}" y2="${py + ph}" class="leak-peak"/><text x="${sx(leak.peakNm) + 4}" y="${py + 11}" class="t-axis leak-peak-t">peak ${leak.peakNm} nm</text>` : '';
   return `<g class="leak-panel" role="alert">
     <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" class="leak-body"/>
-    <text x="${x + 12}" y="${y + 19}" class="t-leak">⚠ WARNING — ${pct(leak.frac)} of excitation passes the cube dichroic</text>
-    <text x="${x + 12}" y="${y + 33}" class="t-axis">${esc(dc ? `cube dichroic ${name}` : 'no cube dichroic — nothing reaches the sample')}</text>
+    <text x="${x + 12}" y="${y + 17}" class="t-leak">⚠ WARNING — ${pct(leak.frac)} of excitation passes the cube dichroic</text>
+    <text x="${x + 12}" y="${y + 30}" class="t-axis">${esc(dc ? `cube dichroic ${name}` : 'no cube dichroic — nothing reaches the sample')}</text>
     ${ticks.join('')}
     <path d="${path(leak.arriving, true)}" class="leak-arriving"/>
     <path d="${path(leak.passed, true)}" class="leak-passed"/>
     <path d="${path(T, false, true)}" class="leak-T"/>
     ${pk}
-    <g transform="translate(${x + w - 12},${y + h - 7})" text-anchor="end"><text class="t-axis"><tspan class="leg-arr">■</tspan> arriving  <tspan class="leg-pass">■</tspan> passes  <tspan class="leg-T">—</tspan> dichroic T</text></g>
+    <g transform="translate(${x + w - 12},${y + 30})" text-anchor="end"><text class="t-axis"><tspan class="leg-arr">■</tspan> arriving  <tspan class="leg-pass">■</tspan> passes  <tspan class="leg-T">—</tspan> dichroic T</text></g>
   </g>`;
+}
+
+// ------------------------------------------------------------------ FRET controls
+
+/** FRET switch + donor/acceptor choice (row above the cell) and the vertical efficiency bar
+ *  (left of the cell). Options list the fluorophores enabled in the sample. */
+function fretControls(ctx) {
+  const f = fretOf(ctx.doc);
+  const fl = ctx.doc.fluors.filter((x) => x.enabled).map((x) => ({ key: x.key, name: ctx.store.fluors.get(x.key)?.name ?? x.key }));
+  const opts = (sel) => ['<option value="">—</option>', ...fl.map((x) => `<option value="${x.key}" ${x.key === sel ? 'selected' : ''}>${esc(x.name)}</option>`)].join('');
+  const pct0 = Math.round(f.efficiency * 100);
+  const applied = !!ctx.result?.fret;
+  return `<foreignObject x="${404 + L.s}" y="114" width="424" height="40" class="fret-ctl">
+      <div xmlns="http://www.w3.org/1999/xhtml" class="fret-row ${f.on ? 'on' : ''}">
+        <label class="fret-switch" title="Simulate FRET between a donor and an acceptor in the sample">
+          <input type="checkbox" data-fret="on" ${f.on ? 'checked' : ''}/><span class="sw-track"><span class="sw-knob"></span></span><b>FRET</b>
+        </label>
+        <label>Donor <select data-fret="donor" ${f.on ? '' : 'disabled'}>${opts(f.donor)}</select></label>
+        <label>Acceptor <select data-fret="acceptor" ${f.on ? '' : 'disabled'}>${opts(f.acceptor)}</select></label>
+        ${f.on && !applied ? '<span class="fret-bad" title="Choose a donor and a different acceptor, both enabled in the sample">not applied</span>' : ''}
+      </div>
+    </foreignObject>
+    ${f.on ? `<foreignObject x="${386 + L.s}" y="168" width="58" height="128" class="fret-ctl">
+      <div xmlns="http://www.w3.org/1999/xhtml" class="fret-bar" title="FRET efficiency E: fraction of donor excitations transferred to the acceptor">
+        <span class="fret-val">${pct0}%</span>
+        <input type="range" min="0" max="100" step="1" value="${pct0}" data-fret="E" aria-label="FRET efficiency (percent)"/>
+        <span class="fret-lbl">E</span>
+      </div>
+    </foreignObject>` : ''}`;
 }
 
 // ------------------------------------------------------------------ cube presets button
@@ -538,6 +573,7 @@ export function renderDiagram(el, ctx, handlers) {
     </g>
     ${exPanel(L.EX.x, L.EX.y, L.EX.w, L.EX.h, { acq, store, doc, colors: ctx.fluorColors, exMin: ctx.exMin })}
     ${leak && leak.frac * 100 >= ctx.leakThreshold && integrate(leak.arriving) > 0 ? leakPanel(leak, doc, store) : ''}
+    ${fretControls(ctx)}
     <foreignObject x="${910 + L.s}" y="596" width="${Math.max(150, 175 + L.R - L.s)}" height="58" class="leak-ctl">
       <div xmlns="http://www.w3.org/1999/xhtml" class="leak-slider" title="Show the cube-dichroic WARNING when at least this much excitation passes through the dichroic">
         <label>Leak warning ≥ <b class="leak-val">${ctx.leakThreshold}%</b></label>
@@ -561,6 +597,12 @@ export function renderDiagram(el, ctx, handlers) {
   act('[data-exmin]', () => handlers.onToggleExMin());
   act('[data-cammin]', (g) => handlers.onToggleCamMin(g.dataset.cammin));
   act('[data-cube]', (g) => handlers.onCubeMenu(g.getBoundingClientRect()));
+  el.querySelector('[data-fret="on"]')?.addEventListener('change', (e) => handlers.onFret({ on: e.target.checked }));
+  el.querySelector('[data-fret="donor"]')?.addEventListener('change', (e) => handlers.onFret({ donor: e.target.value || null }));
+  el.querySelector('[data-fret="acceptor"]')?.addEventListener('change', (e) => handlers.onFret({ acceptor: e.target.value || null }));
+  const eBar = el.querySelector('[data-fret="E"]');
+  eBar?.addEventListener('input', () => { el.querySelector('.fret-val').textContent = `${eBar.value}%`; });
+  eBar?.addEventListener('change', () => handlers.onFret({ efficiency: +eBar.value / 100 }));
   const slider = el.querySelector('.leak-slider input');
   slider?.addEventListener('input', () => { el.querySelector('.leak-val').textContent = `${slider.value}%`; });
   slider?.addEventListener('change', () => handlers.onLeakThreshold(+slider.value));

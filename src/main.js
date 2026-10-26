@@ -1,7 +1,7 @@
 import './style.css';
 import { SpectraStore } from './data/spectraStore.js';
 import { makeBackend } from './backend.js';
-import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig, TEST_ID, revisionKind } from './schema.js';
+import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig, TEST_ID, revisionKind, fretOf } from './schema.js';
 import { idsToLoad, resolve, warnings } from './resolve.js';
 import { merge3 } from './merge.js';
 import { simulate } from './physics/simulate.js';
@@ -583,6 +583,16 @@ const diagramHandlers = {
     });
   },
   onToggleExMin: () => { state.exMin = !state.exMin; savePrefs(); render(); },
+  onFret: (patch) => edit((d) => {
+    const f = { ...fretOf(d), ...patch };
+    if (patch.on && (!f.donor || !f.acceptor)) {
+      // first switch-on: shorter-emission fluorophore as donor, longer as acceptor
+      const fl = d.fluors.filter((x) => x.enabled).map((x) => ({ key: x.key, em: state.store.fluors.get(x.key)?.emMax ?? 0 })).sort((a, b) => a.em - b.em);
+      f.donor ??= fl[0]?.key ?? null;
+      f.acceptor ??= fl.find((x) => x.key !== f.donor && x.em >= (fl.find((y) => y.key === f.donor)?.em ?? 0))?.key ?? fl.find((x) => x.key !== f.donor)?.key ?? null;
+    }
+    d.fret = f;
+  }),
   onLeakThreshold: (v) => { state.leakThreshold = Math.max(0, Math.min(25, v)); savePrefs(); render(); },
   onToggleCamMin: (cam) => { state.camMin = { ...state.camMin, [cam]: !state.camMin[cam] }; savePrefs(); render(); },
   onBeamHover: (em, label, event) => {

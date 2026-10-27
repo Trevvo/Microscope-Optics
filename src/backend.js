@@ -1,13 +1,14 @@
 // Storage + auth backends with one interface:
 //   onAuth(cb) signIn(user, pass) signOut()
 //   watchConfigs(cb) watchConfig(id, cb) createConfig(content)
-//   saveConfig(id, content, base) → {saved, merged, conflicts, remote}: atomically merges our
+//   saveConfig(id, content, base, normalize?) → {saved, merged, conflicts, remote}: atomically merges our
 //     edits (relative to base) into the server's current copy; writes nothing on conflict
 //   ensureConfig(id, content): create a config with a fixed id only if it doesn't exist (TEST)
 //   deleteConfig(id): delete a config and all its revisions
 //   addRevision(id, snapshot, label, kind) listRevisions(id)   kind: 'manual' | 'save'
 //   watchCustomSpectra(cb) addCustomSpectrum({name, cat, sub, data})
 //   watchInventory(cb) saveInventory(ids)   — the lab's "our filters" list (null until first saved)
+//   watchCubes(cb) saveCubes(presets)       — shared premade-cube presets (null until first saved)
 // FirebaseBackend is used when src/firebase-config.js has an apiKey; otherwise
 // LocalBackend keeps everything in localStorage (single-browser dev mode).
 
@@ -17,10 +18,14 @@ import { merge3, deepEqual } from './merge.js';
 // Strip server bookkeeping so documents compare/merge on content only.
 const content = ({ updatedAt, updatedBy, updatedSession, createdAt, createdBy, id, ...rest }) => rest;
 
-/** Merge our edits (relative to `base`) into the server's current copy. */
-function mergeForSave(serverDoc, local, base) {
+/**
+ * Merge our edits (relative to `base`) into the server's current copy. `normalize` brings the
+ * server copy into the same shape as `base` (defaults filled in), so fields an older copy of the
+ * app never wrote do not count as someone else's change.
+ */
+function mergeForSave(serverDoc, local, base, normalize = content) {
   if (!serverDoc) return { merged: local, conflicts: [] };
-  const theirs = content(serverDoc);
+  const theirs = normalize(serverDoc);
   if (!base || deepEqual(theirs, base)) return { merged: local, conflicts: [], theirs };
   return { ...merge3(base, local, theirs), theirs };
 }
@@ -94,13 +99,13 @@ class FirebaseBackend {
     return ref.id;
   }
 
-  saveConfig(id, local, base) {
+  saveConfig(id, local, base, normalize) {
     const { doc, runTransaction } = this.f;
     const ref = doc(this.db, 'configs', id);
     return runTransaction(this.db, async (tx) => {
       const snap = await tx.get(ref);
       const server = snap.exists() ? snap.data() : null;
-      const { merged, conflicts, theirs } = mergeForSave(server, local, base);
+      const { merged, conflicts, theirs } = mergeForSave(server, local, base, normalize);
       if (conflicts.length) return { saved: false, merged, conflicts, remote: server };
       tx.set(ref, { ...merged, ...this.stamp() });
       return { saved: true, merged, conflicts, remote: server, changedByOthers: !!theirs && !deepEqual(merged, local) };
@@ -161,6 +166,18 @@ class FirebaseBackend {
     return setDoc(doc(this.db, 'settings', 'inventory'), { ids, updatedBy: this.userName, updatedAt: serverTimestamp() });
   }
 
+  watchCubes(cb) {
+    const { doc, onSnapshot } = this.f;
+    // a read error (e.g. rules not yet deployed) reports null plus the error: the app then uses
+    // the built-in presets without writing them
+    return onSnapshot(doc(this.db, 'settings', 'cubes'), (d) => cb(d.exists() ? d.data().presets ?? [] : null), (e) => { console.warn('cube presets', e); cb(null, e); });
+  }
+
+  saveCubes(presets) {
+    const { doc, setDoc, serverTimestamp } = this.f;
+    return setDoc(doc(this.db, 'settings', 'cubes'), { presets, updatedBy: this.userName, updatedAt: serverTimestamp() });
+  }
+
   async addCustomSpectrum(s) {
     const { collection, addDoc, serverTimestamp } = this.f;
     const ref = await addDoc(collection(this.db, 'customSpectra'), {
@@ -178,7 +195,7 @@ class LocalBackend {
   mode = 'local';
   sessionId = sessionId;
   userName = 'local';
-  listeners = { configs: new Set(), config: new Map(), custom: new Set(), inventory: new Set() };
+  listeners = { configs: new Set(), config: new Map(), custom: new Set(), inventory: new Set(), cubes: new Set() };
 
   constructor() {
     try {
@@ -213,6 +230,19 @@ class LocalBackend {
     const custom = Object.entries(this.data.custom).map(([id, d]) => ({ id, ...d }));
     this.listeners.custom.forEach((cb) => cb(custom));
     this.listeners.inventory.forEach((cb) => cb(this.data.inventory ?? null));
+    this.listeners.cubes.forEach((cb) => cb(this.data.cubes ?? null));
+  }
+
+  watchCubes(cb) {
+    this.listeners.cubes.add(cb);
+    queueMicrotask(() => cb(this.data.cubes ?? null));
+    return () => this.listeners.cubes.delete(cb);
+  }
+
+  async saveCubes(presets) {
+    this.data.cubes = presets;
+    this.persist();
+    this.emit();
   }
 
   watchInventory(cb) {
@@ -262,11 +292,11 @@ class LocalBackend {
     return id;
   }
 
-  async saveConfig(id, local, base) {
+  async saveConfig(id, local, base, normalize) {
     // re-read storage so another tab's write is merged, as the Firestore transaction does
     try { this.data = JSON.parse(localStorage.getItem(LS)) ?? this.data; } catch { /* keep in-memory copy */ }
     const server = this.data.configs[id] ?? null;
-    const { merged, conflicts, theirs } = mergeForSave(server, local, base);
+    const { merged, conflicts, theirs } = mergeForSave(server, local, base, normalize);
     if (conflicts.length) return { saved: false, merged, conflicts, remote: server };
     this.data.configs[id] = { ...merged, ...this.stamp() };
     this.persist();

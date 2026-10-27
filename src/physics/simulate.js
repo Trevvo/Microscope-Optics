@@ -30,10 +30,8 @@ function step(id, label, inp, curve, out) {
   return { id, label, in: inp, curve, out, frac: frac(out, inp) };
 }
 
-/** Transmission from the sample to each camera port (everything after emission). */
-function detectionPaths(input) {
-  const { cube = {}, splitter = {} } = input;
-  const sp = splitter;
+/** Transmission from the sample to each camera port (everything after emission) for one cube. */
+function detectionPaths(cube, sp) {
   let sA, sB;
   if (sp.dichroic) {
     sA = sp.dichroic;
@@ -44,76 +42,68 @@ function detectionPaths(input) {
     sB = toA ? zeros() : null;
   }
   const common = mul(cube.dichroic, cube.emitter);
-  return {
-    common,
-    split: { A: sA, B: sB },
-    cams: {
-      A: mul(common, sA, sp.armA?.filter, sp.armA?.camera),
-      B: mul(common, sB, sp.armB?.filter, sp.armB?.camera),
-    },
-    active: sp.dichroic ? ['A', 'B'] : [(sp.bypassTo ?? 'A')],
+  const cams = {
+    A: mul(common, sA, sp.armA?.filter, sp.armA?.camera),
+    B: mul(common, sB, sp.armB?.filter, sp.armB?.camera),
   };
+  // Cumulative transmission from the sample to each point on the emission path:
+  // emission at a point for fluorophore f = emitted_f(λ) × cumulative[point](λ).
+  const cum = { sample: null };
+  cum['em:cubeDichroic'] = mul(cube.dichroic);
+  cum.emitter = mul(cube.dichroic, cube.emitter);
+  cum['gemini:A'] = mul(cum.emitter, sA);
+  cum['gemini:B'] = mul(cum.emitter, sB);
+  cum.armA = mul(cum['gemini:A'], sp.armA?.filter);
+  cum.armB = mul(cum['gemini:B'], sp.armB?.filter);
+  cum.camA = cams.A;
+  cum.camB = cams.B;
+  return { common, split: { A: sA, B: sB }, cams, cum, active: sp.dichroic ? ['A', 'B'] : [(sp.bypassTo ?? 'A')] };
 }
 
 /**
  * @param {object} input
  *   leds: [{key, label, spectrum, paddle}]
- *   cube: {exciter, dichroic, emitter}
+ *   cube: {exciter, dichroic, emitter} — default cube for acquisitions without their own
  *   splitter: {dichroic, bypassTo: 'A'|'B', armA: {filter, camera}, armB: {filter, camera}}
  *   fluors: [{key, name, ex, em, ec?, qy?}]
- *   acquisitions: [{name, ledsOn: [ledKey]}]
+ *   acquisitions: [{name, ledsOn: [ledKey], cube?: {exciter, dichroic, emitter}}]
  *   fret: {donor, acceptor, E} | null — FRET between two of the fluorophores (keys), E in 0–1.
  *     Donor emission falls to (1 − E) of its value (E = 1 − F_DA/F_D, Lakowicz 2006 ch. 13);
  *     the transferred excitation E·A_D is emitted by the acceptor with its own QY
  *     (sensitized emission; Zal & Gascoigne 2004, Biophys J 86:3923). 1:1 stoichiometry.
  */
 export function simulate(input) {
-  const { leds = [], cube = {}, fluors = [], acquisitions = [] } = input;
+  const { leds = [], fluors = [], acquisitions = [] } = input;
+  const sp = input.splitter ?? {};
   const fret = input.fret && input.fret.donor !== input.fret.acceptor ? input.fret : null;
-  const det = detectionPaths(input);
-  // An empty dichroic slot reflects nothing: excitation passes straight through and never
-  // reaches the sample (emission still passes, T = 1).
-  const cubeReflect = cube.dichroic ? complement(cube.dichroic) : zeros();
-  const cubePass = cube.dichroic ?? null; // excitation transmitted through the dichroic (null = all)
 
-  // Fluorophore shapes and detection efficiencies do not depend on the acquisition.
+  // Fluorophore shapes do not depend on the acquisition.
   const F = fluors.map((raw) => {
     const f = { ...raw, ec: raw.ec ?? 1, qy: raw.qy ?? 1 };
-    const exN = normalizePeakInRange(f.ex); // scaled by the ex maximum within 360–700 nm
-    const emN = normalizeArea(f.em); // per emitted photon
-    return {
-      ...f,
-      exN,
-      emN,
-      collection: { A: dot(emN, det.cams.A), B: dot(emN, det.cams.B) },
-    };
+    return { ...f, exN: normalizePeakInRange(f.ex), emN: normalizeArea(f.em) }; // ex scaled by its 360–700 nm max; em per photon
   });
-
-  // Cumulative transmission from the sample to each point on the emission path.
-  // Emission at a point for fluorophore f = emitted_f(λ) × cumulative[point](λ).
-  const sp0 = input.splitter ?? {};
-  const cum = {};
-  cum.sample = null;
-  cum['em:cubeDichroic'] = mul(cube.dichroic);
-  cum.emitter = mul(cube.dichroic, cube.emitter);
-  cum['gemini:A'] = mul(cum.emitter, det.split.A);
-  cum['gemini:B'] = mul(cum.emitter, det.split.B);
-  cum.armA = mul(cum['gemini:A'], sp0.armA?.filter);
-  cum.armB = mul(cum['gemini:B'], sp0.armB?.filter);
-  cum.camA = det.cams.A;
-  cum.camB = det.cams.B;
 
   const channels = [];
   const acqOut = acquisitions.map((acq, ai) => {
+    const cube = acq.cube ?? input.cube ?? {};
+    const det = detectionPaths(cube, sp);
+    // An empty dichroic slot reflects nothing: excitation passes straight through and never
+    // reaches the sample (emission still passes, T = 1).
+    const cubeReflect = cube.dichroic ? complement(cube.dichroic) : zeros();
+    const cubePass = cube.dichroic ?? null; // excitation transmitted through the dichroic (null = all)
+    const collection = F.map((f) => ({ A: dot(f.emN, det.cams.A), B: dot(f.emN, det.cams.B) }));
+
     const on = leds.filter((l) => l.spectrum && acq.ledsOn?.includes(l.key));
     const ledSteps = [];
     const ledLines = []; // FPbase-style lines: where each LED's light peaks at the sample
+    const exBy = []; // per LED: photons before (raw) and after its paddle, for the excitation hover
     let raw = zeros(); // LED photons before any filter
     let src = zeros(); // after paddles
     for (const l of on) {
       const p = toPhotons(normalizeArea(l.spectrum));
       const out = mul(p, l.paddle);
       ledSteps.push(step(`paddle:${l.key}`, `${l.label} paddle`, p, l.paddle, out));
+      exBy.push({ key: l.key, name: l.label, raw: p, afterPaddle: out });
       raw = add(raw, p);
       src = add(src, out);
       const atS = mul(out, cube.exciter, cubeReflect);
@@ -121,6 +111,8 @@ export function simulate(input) {
       for (let j = 1; j < N; j++) if (atS[j] > atS[pk]) pk = j;
       if (atS[pk] > 0) ledLines.push({ key: l.key, label: l.label, lambda: LAMBDA[pk], amount: integrate(atS), spectrum: atS });
     }
+    // Cumulative transmission after the paddles to each point on the excitation path.
+    const exCum = { source: null, 'ex:exciter': mul(cube.exciter), 'ex:cubeDichroic': mul(cube.exciter, cubeReflect), leak: mul(cube.exciter, cubePass) };
     const afterEx = mul(src, cube.exciter);
     const atSample = mul(afterEx, cubeReflect);
     const rawTotal = integrate(raw);
@@ -165,7 +157,6 @@ export function simulate(input) {
     for (const e of emittedBy) for (let j = 0; j < N; j++) emitted[j] += e.spectrum[j];
     const afterCubeDc = mul(emitted, cube.dichroic);
     const afterEm = mul(afterCubeDc, cube.emitter);
-    const sp = input.splitter ?? {};
     const toA = mul(afterEm, det.split.A);
     const toB = mul(afterEm, det.split.B);
     const armA = mul(toA, sp.armA?.filter);
@@ -200,16 +191,23 @@ export function simulate(input) {
     }
 
     for (const c of det.active) channels.push({ acq: ai, cam: c, label: `${acq.name || `Acq ${ai + 1}`} · Camera ${c === 'A' ? 1 : 2}` });
-    return { name: acq.name, ledsOn: on.map((l) => l.key), perFluor, steps, leakage, excitation: atSample, ledLines, emittedBy, emittedByNoFret, cubeLeak };
+    return {
+      name: acq.name, ledsOn: on.map((l) => l.key), perFluor, steps, leakage, excitation: atSample, ledLines,
+      emittedBy, emittedByNoFret, cubeLeak, exBy, exCum, collection,
+      cumulative: det.cum, detection: det.cams, activeCams: det.active,
+    };
   });
 
-  // signal[f][ch] = emitted photons (absorbed · QY, FRET-adjusted) · collection
+  // signal[f][ch] = emitted photons (absorbed · QY, FRET-adjusted) · that acquisition's collection
   const signal = F.map((f, fi) =>
-    channels.map((ch) => acqOut[ch.acq].perFluor[fi].emitted * f.collection[ch.cam]),
+    channels.map((ch) => acqOut[ch.acq].perFluor[fi].emitted * acqOut[ch.acq].collection[fi][ch.cam]),
   );
   const maxCell = Math.max(0, ...signal.flat());
   const colSum = channels.map((_, ci) => signal.reduce((s, row) => s + row[ci], 0));
   const rowSum = signal.map((row) => row.reduce((s, v) => s + v, 0));
+  // Acquisition 0's detection stands in for callers that predate per-acquisition cubes.
+  const first = acqOut[0] ?? detectionPaths(input.cube ?? {}, sp);
+  const firstCollection = acqOut[0]?.collection ?? F.map((f) => ({ A: dot(f.emN, first.cams?.A ?? first.detection.A), B: dot(f.emN, first.cams?.B ?? first.detection.B) }));
 
   return {
     channels,
@@ -219,7 +217,8 @@ export function simulate(input) {
       ec: f.ec,
       qy: f.qy,
       brightness: (f.ec * f.qy) / 1000,
-      collection: f.collection,
+      collection: firstCollection[fi],
+      collectionByAcq: acqOut.map((a) => a.collection[fi]),
       exEff: acqOut.map((a) => a.perFluor[fi].exEff),
     })),
     signal,
@@ -227,9 +226,9 @@ export function simulate(input) {
     composition: signal.map((row) => row.map((v, ci) => (colSum[ci] > 0 ? (100 * v) / colSum[ci] : 0))),
     rowPct: signal.map((row, fi) => row.map((v) => (rowSum[fi] > 0 ? (100 * v) / rowSum[fi] : 0))),
     acquisitions: acqOut,
-    detection: det.cams,
-    activeCams: det.active,
-    cumulative: cum,
+    detection: acqOut[0]?.detection ?? first.cams,
+    activeCams: acqOut[0]?.activeCams ?? first.active,
+    cumulative: acqOut[0]?.cumulative ?? first.cum,
     fret: fret && F.some((f) => f.key === fret.donor) && F.some((f) => f.key === fret.acceptor) ? { ...fret } : null,
   };
 }

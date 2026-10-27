@@ -56,6 +56,16 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
+    // Shared premade-cube presets. Configs link to a preset by id, so editing one
+    // changes every cube linked to it.
+    match /settings/cubes {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && request.resource.data.keys().hasOnly(['presets', 'updatedBy', 'updatedAt'])
+        && request.resource.data.presets is list && request.resource.data.presets.size() <= 100
+        && request.resource.data.updatedAt == request.time;
+    }
+
     match /customSpectra/{specId} {
       allow read: if signedIn();
       allow create: if signedIn()

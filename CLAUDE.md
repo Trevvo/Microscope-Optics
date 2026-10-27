@@ -19,7 +19,9 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
   - Path: LED (normalized to equal power, then converted to photons ×λ) → paddle → cube exciter → cube dichroic R = 1−T → sample.
   - Fluorophores: ex spectra are peak-normalized and em spectra area-normalized.
   - Emission path: dichroic T → emitter → Gemini (T → cam A, 1−T → cam B; no dichroic means bypass to `bypassTo`) → arm filter → QE.
-  - Outputs: `signal / composition / rowPct / relBright`, `steps`, `cumulative` (per emission point, used for the beam hover), `ledLines`, `emittedBy`, `leakage`.
+  - Each acquisition has its own cube (`acquisitions[i].cube`, falling back to `input.cube`), so detection is computed per acquisition. `signal` uses each channel's own acquisition.
+  - Outputs: `signal / composition / rowPct / relBright`, `ledLines`, `emittedBy`, `leakage`. Per acquisition: `steps`, `cumulative` (per emission point, used for the emission hover), `detection`, `activeCams`, `collection`, plus `exBy` (per LED: `raw` before and `afterPaddle`) and `exCum` (cumulative excitation transmission after the paddles at `source`, `ex:exciter`, `ex:cubeDichroic`, `leak`), used for the excitation hover. Per fluorophore: `collectionByAcq[ai]`.
+  - `result.cumulative`, `result.detection`, `result.activeCams` and `fluors[i].collection` are acquisition 0's values, kept for older callers. UI code should read the current acquisition's values.
 - **Config → input:** `src/resolve.js` turns a config document (IDs only) into simulate input and builds the warnings.
 - **Spectra store:** `src/data/spectraStore.js` loads `index.json` and lazily fetches `s/{id}.json` (`{v: ints/1e5}`).
   - Custom spectra have IDs `c:<id>`.
@@ -41,7 +43,8 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
 - **UI modules:**
   - `ui/diagram.js`: SVG 752 units tall. Its width follows the stage's aspect ratio (`layout(W)`, minimum 1320), so it fills the screen edge to edge. `L.R` is the offset for right-anchored parts; `L.s` is half the extra width, used to shift the centre block and widen the left column. Anything positioned must use `L.*`, not literals. Right edge, full height: SpectraX. Upper middle-right: excitation panel (`EX_PANEL`), by the light source. Left: Gemini and cameras, each with an always-on, minimizable graph of the light reaching it plus its signal share (`camPanel`, `CAM_PANEL`). Cameras are drawn by `cameraGlyph()`, facing their beam. Minimize state is in the per-browser prefs (`exMin`, `camMin`). Layout constants (`VIEW`, `LED_Y0/DY`, `STAGE_Y`, `CX`, `CELL_SCALE`) are at the top; slot positions are in `slots()`. Keep label text at 12.5 px or larger. `slots()` defines every clickable slot (id, x/y, `cats`, get/set). `exPanel` is the excitation plot, drawn in SVG. It also draws the cell, the camera readouts, and the cube button.
   - `ui/picker.js`: the part picker with columns pref / all / ours. `accepts()` enforces slot typing: filter slots take `F` with `sub != BS`, dichroic slots take only `BS`.
-  - `ui/cubeMenu.js`: the presets menu.
+  - `ui/cubeMenu.js`: the presets menu. Clicking a card links the current acquisition's cube to that preset. **Edit** and **+ New preset** open an inline editor (parts chosen through `ctx.pick`, which wraps `openPicker`). Saving writes `settings/cubes` at once, for everyone.
+  - `ui/beamTooltip.js`: the hover and pinned tooltip on beams. Emission passes `{acq, cumulative}`; excitation passes `{kind: 'ex', sources}` with one source per LED (`onExHover` in main.js). Excitation hit paths carry `data-ex` (`led|<key>`, `paddle|<key>`, or an `exCum` key); emission hit paths carry `data-em`.
   - `ui/fluorPopover.js`
   - `ui/beamTooltip.js`
   - `ui/topbar.js`: title/menu, notes, acquisition tabs, Details button.
@@ -62,7 +65,9 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
   - Measured widths legitimately exceed Semrock nominal widths (e.g. FF01-635/18 → 635 ± 12).
 
 ## Config schema (`src/schema.js`)
-- Fields: `{name, description (the UI "Notes"), schemaVersion: 2, archived, leds[{key,label,spectrumId,paddleId}], cube{exciterId,dichroicId,emitterId}, splitter{dichroicId,bypassTo:'A'|'B',armA{filterId,cameraId},armB{…}}, fluors[{key,enabled}], acquisitions[{name,ledsOn[],intended{A,B}}]}`.
+- Fields: `{name, description (the UI "Notes"), schemaVersion: 2, archived, leds[{key,label,spectrumId,paddleId}], cube{exciterId,dichroicId,emitterId}, splitter{dichroicId,bypassTo:'A'|'B',armA{filterId,cameraId},armB{…}}, fluors[{key,enabled}], acquisitions[{name,ledsOn[],cube{exciterId,dichroicId,emitterId,presetId?},intended{A,B}}]}`.
+- **Per-acquisition cubes:** each acquisition tab has its own LEDs and cube. The splitter, arm filters, paddles and cameras are shared. `normalizeConfig` copies the legacy `doc.cube` into any acquisition without one, so old configs give the same results. `doc.cube` stays in the document for older copies of the app and is no longer edited.
+  - `presetId` links a cube to a shared preset. `effectiveCube(acq, presets)` returns the live preset parts when linked, or the acquisition's own parts when unlinked or when the preset was deleted. Choosing any cube part by hand unlinks (`slots(doc, ai, presets)` setters). A new acquisition copies the current tab's cube.
 - Server-stamped fields are `updatedAt`, `updatedBy`, `updatedSession`.
 - LED keys: `violet blue cyan green red nir`. Their labels are UV-Violet, Blue, Cyan-Teal, Green-Yellow, Red-Far Red, NIR.
 - `migrateLeds()` upgrades v1 documents (old filtered SpectraX IDs, `teal` key). Any new field needs a default in `normalizeConfig()`, and possibly a `schemaVersion` bump with a migration.
@@ -76,12 +81,14 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
   - `configs/{id}/revisions/*`: append-only snapshots. One is taken before a user's first edit in a session, then autosnapshots at most every 10 min, plus manual "Save version".
   - `customSpectra/*`: append-only.
   - `settings/inventory {ids}`: the "our filters" list.
+  - `settings/cubes {presets[{id, name, part?, exciterId, dichroicId, emitterId, paddles?}]}`: the shared cube presets. If reading it fails (e.g. rules not deployed), the app uses the built-in presets without writing them.
+- `saveConfig(id, content, base, normalize)` normalizes the server copy before the 3-way merge. Without it, fields an older client never wrote (such as acquisition cubes) look like someone else's edit and every first save reports a conflict.
 - `firestore.rules` requires sign-in, validates shapes, and forbids deletes. **If you add document fields, update `validConfig` `hasOnly`, or saves will fail.**
 - Login: the username is mapped to `<user>@scope.lab` (`USERNAME_DOMAIN`). The user creates accounts by hand, with sign-up disabled.
 
 ## Lab parts (`src/data/labParts.js`)
 - **`DEFAULT_INVENTORY`** only seeds `settings/inventory` when that document doesn't exist. After go-live, editing this array does NOT change the live list. Users edit it with ★ in the picker, or you write the Firestore document.
-- **`CUBE_PRESETS`**: `{exciter?, dichroic, emitter, paddles?}`. When `paddles` is present, each exciter goes on the LED with the largest normalized overlap (`applyPreset` in main.js) and the cube exciter is set to null. `matchPreset()` drives the cube label.
+- **`CUBE_PRESETS`** (names) only seeds `settings/cubes` (IDs) when that document doesn't exist. After that, presets are edited in the cube menu. When a preset has `paddles`, loading it also puts each exciter on the LED with the largest normalized overlap (`applyPreset` in main.js); later edits to the preset change only the cube parts. `matchPreset(cube, presets)` drives the cube label: the linked preset's name, else a preset with identical parts.
 - **`PADDLE_PREFERRED[ledKey]`** is the picker's "Preferred" column, shown only for paddle slots.
 - Parts are referenced by snapshot **names**. After a snapshot refresh, check they still resolve (the chk pattern: map `index.json` names).
 - Mapping guesses the user hasn't confirmed:
@@ -99,7 +106,7 @@ Static web app: a spectral light-path simulator for the lab's widefield scope. I
 - **FRET:** the optional config field `fret {on, donor, acceptor, efficiency 0–1}` is written only once someone uses the controls; `fretOf()` in schema.js supplies the defaults.
   - Model (`simulate`, `input.fret`): the donor emits (1 − E)·A_D·Q_D, and the acceptor emits (A_A + E·A_D)·Q_A. This is donor quenching plus sensitized emission (Lakowicz 2006 ch. 13; Zal & Gascoigne 2004, Biophys J 86:3923). It assumes 1:1 stoichiometry.
   - `perFluor[i].emitted` and `emitted0` give the photon counts with and without FRET; `emittedBy` and `emittedByNoFret` give the matching spectra. `signal` uses `emitted`. The `collection` bars are unchanged by FRET.
-  - UI: the switch and donor/acceptor selects sit above the cell, and the vertical E bar sits left of the cell (`fretControls`). Camera graphs draw the no-FRET light as a grey outline (`.cam-orig`).
+  - UI: the switch and donor/acceptor selects sit above the cell, and the vertical E bar sits left of the cell, no taller than the cell, clear of the Camera 2 graph (`fretControls`). Camera graphs draw the no-FRET light as a grey outline (`.cam-orig`).
   - Rules allow `fret` as an optional map.
 - Excitation spectra are normalized by their maximum **within 360–700 nm** (`normalizePeakInRange`, `EX_NORM_RANGE`), both in the model and in every plot. Curves may exceed 1 outside that window; the diagram clips them.
 - Camera graphs show one bar per included fluorophore, giving the fraction of its emitted light that reaches that camera (`result.fluors[i].collection[cam]`). They deliberately do not show a composition split.

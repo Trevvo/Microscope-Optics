@@ -1,7 +1,7 @@
 import './style.css';
 import { SpectraStore } from './data/spectraStore.js';
 import { makeBackend } from './backend.js';
-import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig, TEST_ID, revisionKind, fretOf } from './schema.js';
+import { contentOf, migrateLeds, normalizeConfig, referencedIds, seedConfig, TEST_ID, revisionKind, fretOf, effectiveCube } from './schema.js';
 import { idsToLoad, resolve, warnings } from './resolve.js';
 import { merge3 } from './merge.js';
 import { simulate } from './physics/simulate.js';
@@ -10,12 +10,12 @@ import { renderDiagram, slots } from './ui/diagram.js';
 import { openPicker, closePicker } from './ui/picker.js';
 import { openFluorPopover, redrawFluorPopover } from './ui/fluorPopover.js';
 import { openCubeMenu, matchPreset } from './ui/cubeMenu.js';
-import { DEFAULT_INVENTORY, PADDLE_PREFERRED } from './data/labParts.js';
+import { DEFAULT_INVENTORY, PADDLE_PREFERRED, CUBE_PRESETS } from './data/labParts.js';
 import { renderTopbar } from './ui/topbar.js';
 import { renderReadouts, renderWarnings, renderJourney } from './ui/readouts.js';
 import { showBeamTip, hideBeamTip, pinBeamTip } from './ui/beamTooltip.js';
 import { peakNorm } from './ui/plots.js';
-import { fluorColor } from './ui/color.js';
+import { fluorColor, centroid, wavelengthCSS } from './ui/color.js';
 
 const $ = (s) => document.querySelector(s);
 const PREFS_KEY = 'microscope-optics:prefs';
@@ -58,6 +58,7 @@ const state = {
   colors: {},
   warnList: [],
   inventory: new Set(), // the lab's "our filters" spectrum IDs (shared)
+  presets: [], // shared premade cubes (settings/cubes), parts as spectrum IDs
   unsub: { configs: null, config: null, custom: null, inventory: null },
   seeding: false,
 };
@@ -115,6 +116,21 @@ function startApp(user) {
     } else {
       state.inventory = new Set(ids);
     }
+  });
+  state.unsub.cubes = state.backend.watchCubes((list, err) => {
+    if (list === null) {
+      // first run: seed the shared presets from the lab's cube list
+      const id = (n) => (n ? state.store.idByName(n) ?? null : null);
+      state.presets = CUBE_PRESETS.map((p) => ({
+        id: p.id, name: p.name, ...(p.part ? { part: p.part } : {}),
+        exciterId: id(p.exciter), dichroicId: id(p.dichroic), emitterId: id(p.emitter),
+        ...(p.paddles ? { paddles: p.paddles.map(id).filter(Boolean) } : {}),
+      }));
+      if (!err) state.backend.saveCubes(state.presets).catch(console.warn);
+    } else {
+      state.presets = list;
+    }
+    render();
   });
   // the shared TEST sandbox always exists; every session starts on it (deep links still work on load)
   const startHash = location.hash;
@@ -259,7 +275,7 @@ async function save() {
   const content = contentOf(state.doc);
   setStatus('Saving…', 'pending');
   try {
-    const res = await state.backend.saveConfig(id, content, state.base);
+    const res = await state.backend.saveConfig(id, content, state.base, (d) => contentOf(migrateLeds(normalizeConfig(d), state.store.index)));
     if (!res.saved) {
       // someone changed the same field since we last synced: write nothing, ask the user
       state.conflict = res.remote;
@@ -425,7 +441,9 @@ const topActions = {
   addAcq: (i) => {
     edit((d) => {
       const src = d.acquisitions[i];
-      d.acquisitions.push({ name: `Acq ${d.acquisitions.length + 1}`, ledsOn: [...(src?.ledsOn ?? [])], intended: { A: null, B: null } });
+      const cube = { ...(src?.cube ?? d.cube) };
+      if (!cube.presetId) delete cube.presetId;
+      d.acquisitions.push({ name: `Acq ${d.acquisitions.length + 1}`, ledsOn: [...(src?.ledsOn ?? [])], cube, intended: { A: null, B: null } });
     });
     state.acqIndex = state.doc.acquisitions.length - 1;
     render();
@@ -460,7 +478,7 @@ function slotPreview(slotId, arr) {
   }).filter(Boolean);
   // emission arriving at a point on the emission path, split by fluorophore, plus their sum
   const emissionAt = (point) => {
-    const cum = point === 'sample' ? null : state.result?.cumulative?.[point];
+    const cum = point === 'sample' ? null : acq?.cumulative?.[point];
     const parts = (acq?.emittedBy ?? []).map((e) => ({ ...e, s: cum ? e.spectrum.map((v, i) => v * cum[i]) : e.spectrum }));
     const sum = new Float64Array(N);
     for (const p of parts) for (let i = 0; i < N; i++) sum[i] += p.s[i];
@@ -505,7 +523,7 @@ function onSlot(slotId, rect) {
     return;
   }
   if (slotId === 'bypass') return edit((d) => (d.splitter.bypassTo = d.splitter.bypassTo === 'A' ? 'B' : 'A'));
-  const s = slots(state.doc).find((x) => x.id === slotId);
+  const s = slots(state.doc, state.acqIndex, state.presets).find((x) => x.id === slotId);
   if (!s) return;
   const used = new Set(state.configs.flatMap((c) => referencedIds(normalizeConfig(c))));
   openPicker({
@@ -541,13 +559,15 @@ function onSlot(slotId, rect) {
   });
 }
 
-/** Load a premade cube. Triple/Quad also put their single-band exciters on the SpectraX paddles. */
+/**
+ * Link the current acquisition's cube to a preset (later preset edits follow).
+ * Triple/Quad also put their single-band exciters on the shared SpectraX paddles, once.
+ */
 async function applyPreset(p) {
-  const id = (n) => (n ? state.store.idByName(n) : null);
   const assign = {};
-  if (p.paddles) {
+  if (p.paddles?.length) {
     // each exciter goes on the LED whose unfiltered output it passes most light from
-    const ex = p.paddles.map(id).filter(Boolean);
+    const ex = p.paddles.filter(Boolean);
     await state.store.ensure([...ex, ...state.doc.leds.map((l) => l.spectrumId)]);
     for (const fid of ex) {
       const t = state.store.get(fid);
@@ -562,9 +582,7 @@ async function applyPreset(p) {
     }
   }
   edit((d) => {
-    d.cube.exciterId = id(p.exciter);
-    d.cube.dichroicId = id(p.dichroic);
-    d.cube.emitterId = id(p.emitter);
+    d.acquisitions[state.acqIndex].cube = { exciterId: p.exciterId ?? null, dichroicId: p.dichroicId ?? null, emitterId: p.emitterId ?? null, presetId: p.id };
     for (const l of d.leds) if (assign[l.key]) l.paddleId = assign[l.key];
   });
   const moved = Object.entries(assign).map(([k, f]) => `${state.doc.leds.find((l) => l.key === k).label} ← ${state.store.display(f).title}`);
@@ -573,7 +591,19 @@ async function applyPreset(p) {
 
 const diagramHandlers = {
   onSlot,
-  onCubeMenu: (rect) => openCubeMenu({ store: state.store, anchor: rect, current: matchPreset(state.doc, state.store), apply: applyPreset }),
+  onCubeMenu: async (rect) => {
+    await state.store.ensure(state.presets.flatMap((p) => [p.exciterId, p.dichroicId, p.emitterId, ...(p.paddles ?? [])]).filter(Boolean));
+    openCubeMenu({
+      store: state.store, anchor: rect, presets: state.presets,
+      currentId: state.doc.acquisitions[state.acqIndex]?.cube?.presetId ?? null,
+      apply: applyPreset,
+      save: async (list) => { await state.backend.saveCubes(list); state.presets = list; render(); },
+      pick: ({ title, cats, current, anchor }) => new Promise((done) => openPicker({
+        title, cats, current, store: state.store, anchor, used: new Set(), ours: () => state.inventory,
+        preview: () => [], onPick: (id) => done(id),
+      })),
+    });
+  },
   onToggleLed: (key) => {
     const l = state.doc.leds.find((x) => x.key === key);
     if (!l?.spectrumId) return flash('Choose an LED spectrum first (click the LED circle)');
@@ -598,7 +628,19 @@ const diagramHandlers = {
   onBeamHover: (em, label, event) => {
     const acq = state.result?.acquisitions[state.acqIndex];
     if (!em || !acq) return hideBeamTip();
-    showBeamTip({ acq, cumulative: state.result.cumulative[em], label, colors: state.colors, event });
+    showBeamTip({ acq, cumulative: acq.cumulative[em], label, colors: state.colors, event });
+  },
+  onExHover: (point, label, event) => {
+    const acq = state.result?.acquisitions[state.acqIndex];
+    if (!point || !acq) return hideBeamTip();
+    // point = 'led|<key>' (before its paddle), 'paddle|<key>' (after it), or an exCum key (all LEDs)
+    const [where, led] = point.split('|');
+    const cum = acq.exCum[where] ?? null;
+    const sources = acq.exBy.filter((b) => !led || b.key === led).map((b) => ({
+      key: b.key, name: b.name, color: wavelengthCSS(centroid(b.raw) ?? 550), spectrum: b.raw,
+      s: where === 'led' ? b.raw : cum ? b.afterPaddle.map((v, i) => v * cum[i]) : b.afterPaddle,
+    }));
+    showBeamTip({ kind: 'ex', sources, label, event });
   },
   onBeamPin: () => pinBeamTip(),
 };
@@ -675,22 +717,22 @@ function render() {
     const doc = state.doc;
     if (!doc) return renderTop();
     const { store } = state;
-    const missing = idsToLoad(doc, store).filter((id) => !store.has(id));
+    const missing = idsToLoad(doc, store, state.presets).filter((id) => !store.has(id));
     if (missing.length) {
       await store.ensure(missing);
       if (state.doc !== doc) return;
     }
     state.acqIndex = Math.max(0, Math.min(state.acqIndex, doc.acquisitions.length - 1));
     state.colors = distinctColors(doc.fluors.map((f, i) => [f.key, fluorColor(store.fluors.get(f.key), i)]));
-    const { input, skipped } = resolve(doc, store);
+    const { input, skipped } = resolve(doc, store, state.presets);
     state.result = simulate(input);
-    state.warnList = warnings(doc, store, state.result, skipped);
+    state.warnList = warnings(doc, store, state.result, skipped, state.presets);
 
     renderTop();
     renderDiagram($('#diagram'), {
       doc, store, acq: state.result.acquisitions[state.acqIndex], acqDoc: doc.acquisitions[state.acqIndex],
       fluorColors: state.colors, exMin: state.exMin, camMin: state.camMin, leakThreshold: state.leakThreshold, result: state.result, acqIndex: state.acqIndex, colors: state.colors,
-      cubePreset: matchPreset(doc, store),
+      cubePreset: matchPreset(effectiveCube(doc.acquisitions[state.acqIndex], state.presets), state.presets), presets: state.presets,
     }, diagramHandlers);
     redrawFluorPopover();
     renderDetails();

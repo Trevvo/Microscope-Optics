@@ -1,6 +1,6 @@
-// Hover tooltip for emission beams: the light at that point in the path, one
-// translucent area per fluorophore (overlaps stay visible) plus the total, and
-// how much of the originally emitted light is left. Clicking a beam pins the
+// Hover tooltip for beams: the light at that point in the path, one translucent
+// area per source (fluorophore for emission, LED for excitation; overlaps stay
+// visible) plus the total, and how much of the source light is left. Clicking a beam pins the
 // tooltip; moving over its chart then reads out the mix at each wavelength.
 
 import { LAMBDA, N } from '../physics/grid.js';
@@ -33,7 +33,7 @@ function ensure() {
     line.style.left = `${fx * 100}%`;
     const tot = st.parts.reduce((a, p) => a + p.s[i], 0);
     at.innerHTML = `<b>${LAMBDA[i]} nm</b> ${tot > 0
-      ? st.parts.filter((p) => p.s[i] > 0).sort((a, b) => b.s[i] - a.s[i]).map((p) => `<span><i style="background:${st.colors[p.key]}"></i>${esc(p.name)} ${fmt((100 * p.s[i]) / tot)}%</span>`).join('')
+      ? st.parts.filter((p) => p.s[i] > 0).sort((a, b) => b.s[i] - a.s[i]).map((p) => `<span><i style="background:${p.color}"></i>${esc(p.name)} ${fmt((100 * p.s[i]) / tot)}%</span>`).join('')
       : '<span class="muted">no light</span>'}`;
   });
   cv.addEventListener('mouseleave', () => { line.hidden = true; at.innerHTML = ''; });
@@ -57,17 +57,23 @@ export function pinBeamTip() {
 export const isPinned = () => pinned;
 
 /**
- * @param ctx {acq (simulate acquisition output), cumulative (Float64Array|null), label, colors, event}
+ * Emission: {acq (simulate acquisition output), cumulative (Float64Array|null), label, colors, event}.
+ * Excitation: {kind: 'ex', sources: [{key, name, color, spectrum, s}], label, event}, where
+ * spectrum is the LED light before any filter and s the light left at this point.
  */
-export function showBeamTip({ acq, cumulative, label, colors, event }) {
+export function showBeamTip({ acq, sources, kind = 'em', cumulative, label, colors = {}, event }) {
   const el = ensure();
   if (pinned) return; // keep the pinned view until it is closed
   el.classList.remove('pinned');
   el.querySelector('.bt-close').hidden = true;
   el.querySelector('.bt-at').innerHTML = '';
-  const parts = acq.emittedBy.map((e) => {
-    const s = new Float64Array(N);
-    for (let i = 0; i < N; i++) s[i] = e.spectrum[i] * (cumulative ? cumulative[i] : 1);
+  const src = sources ?? acq.emittedBy.map((e) => ({ ...e, color: colors[e.key] ?? '#888' }));
+  const parts = src.map((e) => {
+    let s = e.s;
+    if (!s) {
+      s = new Float64Array(N);
+      for (let i = 0; i < N; i++) s[i] = e.spectrum[i] * (cumulative ? cumulative[i] : 1);
+    }
     let tot = 0, orig = 0;
     for (let i = 0; i < N; i++) { tot += s[i]; orig += e.spectrum[i]; }
     return { ...e, s, tot, orig };
@@ -88,7 +94,7 @@ export function showBeamTip({ acq, cumulative, label, colors, event }) {
   if (hi <= lo) { lo = 150; hi = 450; }
   lo = Math.max(0, lo - 10); hi = Math.min(N - 1, hi + 10);
 
-  el.querySelector('.bt-h').innerHTML = `<b>${esc(label || 'Emission')}</b><span>${emitted > 0 ? `${fmt((100 * total) / emitted)}% of emitted light remains` : 'no emission'}</span>`;
+  el.querySelector('.bt-h').innerHTML = `<b>${esc(label || 'Emission')}</b><span>${emitted > 0 ? `${fmt((100 * total) / emitted)}% ${kind === 'ex' ? 'of the LED light remains' : 'of emitted light remains'}` : kind === 'ex' ? 'no LED on' : 'no emission'}</span>`;
 
   const cv = el.querySelector('canvas');
   const g = cv.getContext('2d');
@@ -121,11 +127,11 @@ export function showBeamTip({ acq, cumulative, label, colors, event }) {
     for (let i = lo; i <= hi; i++) g.lineTo(X(i), Y(p.s[i]));
     g.lineTo(X(hi), Y(0));
     g.closePath();
-    g.fillStyle = colors[p.key] ?? '#888';
+    g.fillStyle = p.color;
     g.globalAlpha = 0.4;
     g.fill();
     g.globalAlpha = 0.95;
-    g.strokeStyle = colors[p.key] ?? '#888';
+    g.strokeStyle = p.color;
     g.lineWidth = 2;
     g.stroke();
     g.globalAlpha = 1;
@@ -143,10 +149,10 @@ export function showBeamTip({ acq, cumulative, label, colors, event }) {
   el.querySelector('.bt-list').innerHTML = parts
     .filter((p) => p.orig > 0)
     .sort((a, b) => b.tot - a.tot)
-    .map((p) => `<li><i style="background:${colors[p.key]}"></i>${esc(p.name)}<span>${total > 0 ? fmt((100 * p.tot) / total) : '0'}% of light here</span><em>${fmt((100 * p.tot) / p.orig)}% of its emission left</em></li>`)
-    .join('') || '<li class="muted">No fluorophores excited</li>';
+    .map((p) => `<li><i style="background:${p.color}"></i>${esc(p.name)}<span>${total > 0 ? fmt((100 * p.tot) / total) : '0'}% of light here</span><em>${fmt((100 * p.tot) / p.orig)}% of its ${kind === 'ex' ? 'light' : 'emission'} left</em></li>`)
+    .join('') || `<li class="muted">${kind === 'ex' ? 'No LEDs on' : 'No fluorophores excited'}</li>`;
 
-  el._state = { parts, lo, hi, colors };
+  el._state = { parts, lo, hi };
 
   el.hidden = false;
   const r = el.getBoundingClientRect();

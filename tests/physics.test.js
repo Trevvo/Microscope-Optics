@@ -218,3 +218,58 @@ describe('FRET', () => {
     expect(m.fret).toBeNull();
   });
 });
+
+describe('a cube per acquisition', () => {
+  const cubeG = { dichroic: Float64Array.from(LAMBDA, (l) => (Math.abs(l - 475) < 20 ? 0 : 1)), emitter: box(495, 540) };
+  const cubeR = { dichroic: Float64Array.from(LAMBDA, (l) => (Math.abs(l - 555) < 20 ? 0 : 1)), emitter: box(590, 660) };
+
+  it('each acquisition uses its own cube for excitation and detection', () => {
+    const r = simulate({
+      leds, fluors: [green, red], cube: cubeG,
+      acquisitions: [{ name: 'g', ledsOn: ['cyan'], cube: cubeG }, { name: 'r', ledsOn: ['green'], cube: cubeR }],
+    });
+    const [g, rr] = r.fluors[0].collectionByAcq;
+    expect(g.A).toBeGreaterThan(0.5); // green emission passes the 495–540 emitter
+    expect(rr.A).toBeLessThan(0.01); // but not the 590–660 one
+    expect(r.fluors[1].collectionByAcq[1].A).toBeGreaterThan(0.5);
+    // channel 0 (acq g) is mostly green, channel 1 (acq r) mostly red
+    expect(r.composition[0][0]).toBeGreaterThan(90);
+    expect(r.composition[1][1]).toBeGreaterThan(90);
+  });
+
+  it('an acquisition without its own cube uses the global one (same as before)', () => {
+    const a = simulate({ leds, fluors: [green, red], cube: cubeG, acquisitions: [{ ledsOn: ['cyan'] }] });
+    const b = simulate({ leds, fluors: [green, red], cube: cubeG, acquisitions: [{ ledsOn: ['cyan'], cube: cubeG }] });
+    expect(b.signal).toEqual(a.signal);
+    expect(a.fluors[0].collection).toEqual(a.fluors[0].collectionByAcq[0]);
+  });
+
+  it('excitation parts per LED multiply through the excitation path to the step outputs', () => {
+    const r = simulate({ leds, fluors: [green], cube: { exciter: box(460, 490), dichroic: longpass(500) }, acquisitions: [{ ledsOn: ['cyan', 'green'] }] });
+    const a = r.acquisitions[0];
+    for (const [pt, stepId] of [['ex:exciter', 'ex:exciter'], ['ex:cubeDichroic', 'ex:cubeDichroic']]) {
+      let sum = 0;
+      for (const e of a.exBy) for (let i = 0; i < N; i++) sum += e.afterPaddle[i] * a.exCum[pt][i];
+      expect(sum).toBeCloseTo(a.steps.find((s) => s.id === stepId).out.reduce((x, y) => x + y, 0), 9);
+    }
+  });
+});
+
+describe('config cubes', async () => {
+  const { normalizeConfig, effectiveCube } = await import('../src/schema.js');
+  it('normalizeConfig gives every acquisition a copy of the old config-level cube', () => {
+    const d = normalizeConfig({ name: 'x', cube: { exciterId: 'e', dichroicId: 'd', emitterId: 'm' }, acquisitions: [{ name: 'a', ledsOn: [] }, { name: 'b', ledsOn: [], cube: { exciterId: 'E2', dichroicId: 'D2', emitterId: null } }] });
+    expect(d.acquisitions[0].cube).toEqual({ exciterId: 'e', dichroicId: 'd', emitterId: 'm' });
+    expect(d.acquisitions[1].cube).toEqual({ exciterId: 'E2', dichroicId: 'D2', emitterId: null });
+  });
+  it('a linked cube follows its preset; an unlinked one keeps its own parts', () => {
+    const presets = [{ id: 'pos-t', exciterId: 'x1', dichroicId: 'd1', emitterId: 'm1' }];
+    const linked = { cube: { exciterId: 'old', dichroicId: 'old', emitterId: 'old', presetId: 'pos-t' } };
+    expect(effectiveCube(linked, presets)).toEqual({ exciterId: 'x1', dichroicId: 'd1', emitterId: 'm1', presetId: 'pos-t' });
+    presets[0].emitterId = 'm2';
+    expect(effectiveCube(linked, presets).emitterId).toBe('m2');
+    expect(effectiveCube({ cube: { exciterId: 'a', dichroicId: 'b', emitterId: 'c' } }, presets)).toEqual({ exciterId: 'a', dichroicId: 'b', emitterId: 'c', presetId: null });
+    // preset deleted: falls back to the copied parts
+    expect(effectiveCube(linked, []).emitterId).toBe('old');
+  });
+});

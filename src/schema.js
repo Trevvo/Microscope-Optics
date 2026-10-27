@@ -107,9 +107,22 @@ export function normalizeConfig(doc) {
   d.leds = Array.isArray(doc?.leds) && doc.leds.length ? doc.leds : b.leds;
   d.fluors = Array.isArray(doc?.fluors) ? doc.fluors : [];
   d.acquisitions = (Array.isArray(doc?.acquisitions) && doc.acquisitions.length ? doc.acquisitions : b.acquisitions).map(
-    (a) => ({ name: a.name ?? '', ledsOn: a.ledsOn ?? [], intended: { A: null, B: null, ...a.intended } }),
+    (a) => {
+      // each acquisition has its own filter cube; older documents had one cube for the whole config
+      const cube = { exciterId: null, dichroicId: null, emitterId: null, ...(a.cube ?? d.cube) };
+      if (!a.cube?.presetId) delete cube.presetId;
+      return { name: a.name ?? '', ledsOn: a.ledsOn ?? [], intended: { A: null, B: null, ...a.intended }, cube };
+    },
   );
   return d;
+}
+
+/** Effective cube parts for an acquisition: a linked preset's current parts, else its own. */
+export function effectiveCube(acq, presets = []) {
+  const c = acq?.cube ?? {};
+  const p = c.presetId ? presets.find((x) => x.id === c.presetId) : null;
+  return p ? { exciterId: p.exciterId ?? null, dichroicId: p.dichroicId ?? null, emitterId: p.emitterId ?? null, presetId: p.id }
+    : { exciterId: c.exciterId ?? null, dichroicId: c.dichroicId ?? null, emitterId: c.emitterId ?? null, presetId: null };
 }
 
 /** Strip server bookkeeping fields for snapshots / duplication. */
@@ -124,6 +137,7 @@ export function referencedIds(doc) {
   return [
     ...(doc.leds ?? []).flatMap((l) => [l.spectrumId, l.paddleId]),
     doc.cube?.exciterId, doc.cube?.dichroicId, doc.cube?.emitterId,
+    ...(doc.acquisitions ?? []).flatMap((a) => [a.cube?.exciterId, a.cube?.dichroicId, a.cube?.emitterId]),
     s.dichroicId, s.armA?.filterId, s.armA?.cameraId, s.armB?.filterId, s.armB?.cameraId,
   ].filter(Boolean);
 }

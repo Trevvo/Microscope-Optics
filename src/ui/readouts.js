@@ -71,15 +71,18 @@ export function renderReadouts(el, ctx) {
     </tbody></table>`;
 
   // --- 3. efficiency table ----------------------------------------------
-  const cams = r.activeCams;
+  // collection depends on each acquisition's cube: one column per camera, or per acquisition × camera when cubes differ
+  const same = r.fluors.every((f) => (f.collectionByAcq ?? []).every((c) => c.A === f.collection.A && c.B === f.collection.B));
+  const cols = same ? r.activeCams.map((c) => ({ acq: 0, cam: c, sub: `→ Camera ${CAM[c]}` }))
+    : r.channels.map((ch) => ({ acq: ch.acq, cam: ch.cam, sub: `${doc.acquisitions[ch.acq].name || `Acq ${ch.acq + 1}`} → Camera ${CAM[ch.cam]}` }));
   const eff = `<table class="eff">
     <thead><tr><th>Fluorophore</th><th>ex / em max</th>
       ${doc.acquisitions.map((a, ai) => `<th title="Fraction of LED photons that excite this fluorophore, as if delivered at its excitation peak">Exc. eff.<br><span class="muted">${esc(a.name || `Acq ${ai + 1}`)}</span></th>`).join('')}
-      ${cams.map((c) => `<th title="Fraction of emitted photons detected by camera ${CAM[c]} (filters × QE)">Collected<br><span class="muted">→ Camera ${CAM[c]}</span></th>`).join('')}</tr></thead>
+      ${cols.map((c) => `<th title="Fraction of emitted photons detected by camera ${CAM[c.cam]} (filters × QE)">Collected<br><span class="muted">${esc(c.sub)}</span></th>`).join('')}</tr></thead>
     <tbody>${r.fluors.map((f) => `<tr><th><i class="sw" style="background:${ctx.colors[f.key]}"></i>${esc(f.name)}</th>
       <td class="muted">${ctx.meta[f.key]?.exMax ? Math.round(ctx.meta[f.key].exMax) : '–'} / ${ctx.meta[f.key]?.emMax ? Math.round(ctx.meta[f.key].emMax) : '–'}</td>
       ${f.exEff.map((e) => `<td>${fmtAbs(e)}</td>`).join('')}
-      ${cams.map((c) => `<td>${fmtAbs(f.collection[c])}</td>`).join('')}</tr>`).join('')}
+      ${cols.map((c) => `<td>${fmtAbs((f.collectionByAcq?.[c.acq] ?? f.collection)[c.cam])}</td>`).join('')}</tr>`).join('')}
     </tbody></table>`;
 
   el.innerHTML = `
@@ -121,7 +124,7 @@ export function renderJourney(el, ctx) {
     el.innerHTML = '';
     return;
   }
-  const cams = r.activeCams;
+  const cams = acq.activeCams ?? r.activeCams;
   const hide = new Set();
   if (!cams.includes('A')) ['gemini:A', 'armA', 'camA'].forEach((x) => hide.add(x));
   if (!cams.includes('B')) ['gemini:B', 'armB', 'camB'].forEach((x) => hide.add(x));
@@ -145,7 +148,7 @@ export function renderJourney(el, ctx) {
   plotSpectra(el.querySelector('[data-p="ex"]'), exSeries, { height: 180, legend: true, sync: 'journey' });
 
   const emSeries = [
-    ...cams.map((c) => ({ label: `Detection → Camera ${CAM[c]}`, data: r.detection[c], color: c === 'A' ? '#8bc34a' : '#ce93d8', width: 2 })),
+    ...cams.map((c) => ({ label: `Detection → Camera ${CAM[c]}`, data: (acq.detection ?? r.detection)[c], color: c === 'A' ? '#8bc34a' : '#ce93d8', width: 2 })),
     ...doc.fluors.filter((f) => f.enabled).map((f) => {
       const m = store.fluors.get(f.key);
       return m && { label: m.name, data: peakNorm(store.get(m.em)), color: colors[f.key], fill: true };

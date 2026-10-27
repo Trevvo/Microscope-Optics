@@ -7,7 +7,7 @@
 import { centroid, passbandCenter, wavelengthCSS } from './color.js';
 import { integrate, LAMBDA, N, LMIN, EX_NORM_RANGE } from '../physics/grid.js';
 import { xRange } from './plots.js';
-import { fretOf } from '../schema.js';
+import { fretOf, effectiveCube } from '../schema.js';
 
 // Layout is sized for laptop screens: a ~1.8:1 drawing that scales up to fill the stage.
 // The drawing is VIEW_H tall; its width follows the stage's aspect ratio (≥ BASE_W) so it
@@ -40,7 +40,14 @@ let CX = L.CX;
 const CAM_NAME = { A: 'Camera 1', B: 'Camera 2' };
 
 /** Slot definitions: id, position, title, picker categories, and doc accessors. */
-export function slots(doc) {
+/** Slot geometry and accessors. The cube slots belong to acquisition `ai`; editing one unlinks its preset. */
+export function slots(doc, ai = 0, presets = []) {
+  const cubeGet = (k) => (d) => effectiveCube(d.acquisitions[ai], presets)[k];
+  const cubeSet = (k) => (d, v) => {
+    const a = d.acquisitions[ai];
+    const { presetId, ...parts } = effectiveCube(a, presets);
+    a.cube = { ...parts, [k]: v };
+  };
   const list = doc.leds.flatMap((l, i) => {
     const y = LED_Y0 + i * LED_DY;
     return [
@@ -49,9 +56,9 @@ export function slots(doc) {
     ];
   });
   return list.concat([
-    { id: 'exciter', x: 820 + L.s, y: 440, title: 'Cube exciter', kind: 'filter', cats: 'filter', get: (d) => d.cube.exciterId, set: (d, v) => (d.cube.exciterId = v) },
-    { id: 'cubeDichroic', x: L.CX, y: 440, title: 'Cube dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.cube.dichroicId, set: (d, v) => (d.cube.dichroicId = v) },
-    { id: 'emitter', x: L.CX, y: 580, title: 'Cube emitter', kind: 'filter', cats: 'filter', get: (d) => d.cube.emitterId, set: (d, v) => (d.cube.emitterId = v) },
+    { id: 'exciter', x: 820 + L.s, y: 440, title: 'Cube exciter', kind: 'filter', cats: 'filter', get: cubeGet('exciterId'), set: cubeSet('exciterId') },
+    { id: 'cubeDichroic', x: L.CX, y: 440, title: 'Cube dichroic', kind: 'dichroic', cats: 'dichroic', get: cubeGet('dichroicId'), set: cubeSet('dichroicId') },
+    { id: 'emitter', x: L.CX, y: 580, title: 'Cube emitter', kind: 'filter', cats: 'filter', get: cubeGet('emitterId'), set: cubeSet('emitterId') },
     { id: 'gemini', x: 440 + L.s, y: 675, title: 'Gemini dichroic', kind: 'dichroic', cats: 'dichroic', get: (d) => d.splitter.dichroicId, set: (d, v) => (d.splitter.dichroicId = v) },
     { id: 'armA', x: 300 + L.s, y: 675, title: 'Arm 1 filter', kind: 'filter', cats: 'filter', get: (d) => d.splitter.armA.filterId, set: (d, v) => (d.splitter.armA.filterId = v) },
     { id: 'camA', x: 130 + L.s, y: 675, r: 34, face: 'right', title: 'Camera 1', kind: 'camera', cats: 'C', get: (d) => d.splitter.armA.cameraId, set: (d, v) => (d.splitter.armA.cameraId = v) },
@@ -247,7 +254,7 @@ function camPanel(cam, ctx, store) {
   const qe = acq?.steps.find((s) => s.id === slotId)?.frac;
   const px = x + 14, pw = w - 28, py = y + 50;
   const parts = [];
-  const cum = r?.cumulative?.[slotId];
+  const cum = acq?.cumulative?.[slotId];
   if (acq && cum && ci >= 0) {
     for (const e of acq.emittedBy) {
       const s = new Float64Array(N);
@@ -289,7 +296,7 @@ function camPanel(cam, ctx, store) {
   const barTop = py + ph + 36;
   const nameW = Math.round(pw * 0.42);
   const bars = fls.map((f, i) => {
-    const frac = ci >= 0 ? f.collection[cam] ?? 0 : 0;
+    const frac = ci >= 0 ? (f.collectionByAcq?.[ctx.acqIndex] ?? f.collection)[cam] ?? 0 : 0;
     const yy = barTop + i * 20;
     const bx = px + nameW, bw = pw - nameW - 52;
     return `<g><title>${esc(f.name)}: ${pct(frac)} of its emitted light reaches ${CAM_NAME[cam]}</title>
@@ -328,7 +335,7 @@ function cameraGlyph(x, y, face, set) {
 
 /** WARNING above the cell: excitation arriving at the cube dichroic (grey), the dichroic's
  *  transmission (white), and the part that passes straight through instead of reflecting (red). */
-function leakPanel(leak, doc, store) {
+function leakPanel(leak, dichroicId, store) {
   const x = 404 + L.s, y = 4, w = 424, h = 104;
   const px = x + 14, pw = w - 28, py = y + 36, ph = h - 62;
   const [x0, x1] = xRange([{ data: leak.arriving }]);
@@ -350,9 +357,9 @@ function leakPanel(leak, doc, store) {
   for (let t = Math.ceil(x0 / 25) * 25; t <= x1; t += 25) {
     ticks.push(`<line x1="${sx(t)}" x2="${sx(t)}" y1="${py}" y2="${py + ph}" class="grid"/><text x="${sx(t)}" y="${py + ph + 12}" class="t-axis" text-anchor="middle">${t}</text>`);
   }
-  const dc = store.get(doc.cube.dichroicId);
+  const dc = store.get(dichroicId);
   const T = dc ?? new Float64Array(N).fill(1);
-  const name = dc ? store.display(doc.cube.dichroicId).title : 'no dichroic';
+  const name = dc ? store.display(dichroicId).title : 'no dichroic';
   const pk = leak.peakNm && leak.peakNm >= x0 && leak.peakNm <= x1
     ? `<line x1="${sx(leak.peakNm)}" x2="${sx(leak.peakNm)}" y1="${py}" y2="${py + ph}" class="leak-peak"/><text x="${sx(leak.peakNm) + 4}" y="${py + 11}" class="t-axis leak-peak-t">peak ${leak.peakNm} nm</text>` : '';
   return `<g class="leak-panel" role="alert">
@@ -388,7 +395,7 @@ function fretControls(ctx) {
         ${f.on && !applied ? '<span class="fret-bad" title="Choose a donor and a different acceptor, both enabled in the sample">not applied</span>' : ''}
       </div>
     </foreignObject>
-    ${f.on ? `<foreignObject x="${386 + L.s}" y="168" width="58" height="128" class="fret-ctl">
+    ${f.on ? `<foreignObject x="${390 + L.s}" y="${STAGE_Y - 84}" width="58" height="86" class="fret-ctl">
       <div xmlns="http://www.w3.org/1999/xhtml" class="fret-bar" title="FRET efficiency E: fraction of donor excitations transferred to the acceptor">
         <span class="fret-val">${pct0}%</span>
         <input type="range" min="0" max="100" step="1" value="${pct0}" data-fret="E" aria-label="FRET efficiency (percent)"/>
@@ -419,7 +426,7 @@ export function renderDiagram(el, ctx, handlers) {
   CX = L.CX;
   const { doc, store, acq, acqDoc } = ctx;
   const steps = Object.fromEntries((acq?.steps ?? []).map((s) => [s.id, s]));
-  const S = slots(doc);
+  const S = slots(doc, ctx.acqIndex, ctx.presets);
   const pos = Object.fromEntries(S.map((s) => [s.id, s]));
   const hasSplit = !!doc.splitter.dichroicId;
   const bypass = doc.splitter.bypassTo;
@@ -427,13 +434,15 @@ export function renderDiagram(el, ctx, handlers) {
   // --- beams
   const srcTotal = steps.source ? integrate(steps.source.in) : 0;
   const emTotal = steps.sample ? integrate(steps.sample.out) : 0;
-  const beam = (d, stepId, base, { cls = '', em = null } = {}) => {
+  const exHit = (d, ex, label) => `<path d="${d}" class="beam-hit" data-ex="${ex}" data-label="${esc(label)}"/>`;
+  const beam = (d, stepId, base, { cls = '', em = null, ex = null } = {}) => {
     const arr = steps[stepId]?.out;
     const c = centroid(arr);
     const rel = arr && base > 0 ? integrate(arr) / base : 0;
     const col = c ? wavelengthCSS(c) : '#39404a';
     const op = rel > 0 ? Math.max(0.2, Math.min(1, 0.2 + Math.sqrt(rel))) : 0.5;
-    const hit = em ? `<path d="${d}" class="beam-hit" data-em="${em}" data-label="${esc(steps[stepId]?.label ?? '')}"/>` : '';
+    const hit = em ? `<path d="${d}" class="beam-hit" data-em="${em}" data-label="${esc(steps[stepId]?.label ?? '')}"/>`
+      : ex ? exHit(d, ex, steps[stepId]?.label ?? '') : '';
     return `<path d="${d}" class="beam ${cls}" stroke="${col}" stroke-opacity="${op.toFixed(2)}" ${rel > 0.02 ? 'filter="url(#beamglow)"' : ''}/>${hit}`;
   };
   const beams = [];
@@ -444,14 +453,16 @@ export function renderDiagram(el, ctx, handlers) {
     const on = acqDoc?.ledsOn.includes(l.key) && l.spectrumId;
     const c = on ? centroid(steps[`paddle:${l.key}`]?.out) : null;
     const col = c ? wavelengthCSS(c) : '#39404a';
-    beams.push(`<path d="M${led.x},${led.y} H${p.x}" class="beam thin" stroke="${col}" stroke-opacity="${on ? 0.95 : 0.5}"/>`);
-    beams.push(`<path d="M${p.x},${p.y} C${p.x - 50},${p.y} ${JX + 30},${JY} ${JX},${JY}" class="beam thin" stroke="${col}" stroke-opacity="${on ? 0.95 : 0.5}"/>`);
+    const d1 = `M${led.x},${led.y} H${p.x}`, d2 = `M${p.x},${p.y} C${p.x - 50},${p.y} ${JX + 30},${JY} ${JX},${JY}`;
+    beams.push(`<path d="${d1}" class="beam thin" stroke="${col}" stroke-opacity="${on ? 0.95 : 0.5}"/>`);
+    beams.push(`<path d="${d2}" class="beam thin" stroke="${col}" stroke-opacity="${on ? 0.95 : 0.5}"/>`);
+    if (on) beams.push(exHit(d1, `led|${l.key}`, `${l.label} LED`), exHit(d2, `paddle|${l.key}`, `${l.label} paddle`));
   });
-  beams.push(beam(`M${JX},${JY} C${JX - 90},${JY} ${pos.exciter.x + 120},${pos.exciter.y} ${pos.exciter.x},${pos.exciter.y}`, 'source', srcTotal, { cls: 'guide' }));
-  beams.push(beam(`M${pos.exciter.x},${pos.exciter.y} H${pos.cubeDichroic.x}`, 'ex:exciter', srcTotal));
+  beams.push(beam(`M${JX},${JY} C${JX - 90},${JY} ${pos.exciter.x + 120},${pos.exciter.y} ${pos.exciter.x},${pos.exciter.y}`, 'source', srcTotal, { cls: 'guide', ex: 'source' }));
+  beams.push(beam(`M${pos.exciter.x},${pos.exciter.y} H${pos.cubeDichroic.x}`, 'ex:exciter', srcTotal, { ex: 'ex:exciter' }));
   // reflected excitation goes up to the sample only if any is reflected (empty dichroic: none)
   if (steps['ex:cubeDichroic'] && integrate(steps['ex:cubeDichroic'].out) > 0) {
-    beams.push(beam(`M${CX + 8},${pos.cubeDichroic.y} V${STAGE_Y + 6}`, 'ex:cubeDichroic', srcTotal));
+    beams.push(beam(`M${CX + 8},${pos.cubeDichroic.y} V${STAGE_Y + 6}`, 'ex:cubeDichroic', srcTotal, { ex: 'ex:cubeDichroic' }));
   }
   // excitation the dichroic transmits carries straight on to a beam dump at the cube wall
   const leak = acq?.cubeLeak;
@@ -459,11 +470,12 @@ export function renderDiagram(el, ctx, handlers) {
   if (leak && leak.frac > 0.001) {
     const c = centroid(leak.passed);
     const relL = srcTotal > 0 ? integrate(leak.passed) / srcTotal : 0;
-    beams.push(`<path d="M${CX},${pos.cubeDichroic.y} H${dumpX + 6}" class="beam leak" stroke="${c ? wavelengthCSS(c) : '#888'}" stroke-opacity="${Math.max(0.25, Math.min(1, 0.2 + Math.sqrt(relL))).toFixed(2)}"><title>${pct(leak.frac)} of the excitation passes through the cube dichroic (lost, and can reach the cameras as background)</title></path>`);
+    beams.push(`<path d="M${CX},${pos.cubeDichroic.y} H${dumpX + 6}" class="beam leak" stroke="${c ? wavelengthCSS(c) : '#888'}" stroke-opacity="${Math.max(0.25, Math.min(1, 0.2 + Math.sqrt(relL))).toFixed(2)}"><title>${pct(leak.frac)} of the excitation passes through the cube dichroic (lost, and can reach the cameras as background)</title></path>`,
+      exHit(`M${CX},${pos.cubeDichroic.y} H${dumpX + 6}`, 'leak', 'Through the cube dichroic (leak)'));
   }
   beams.push(`<g class="beam-dump"><title>Beam dump: excitation transmitted by the cube dichroic</title><rect x="${dumpX - 8}" y="${pos.cubeDichroic.y - 16}" width="12" height="32" rx="2"/><path d="M${dumpX - 8},${pos.cubeDichroic.y - 8} l12,-8 M${dumpX - 8},${pos.cubeDichroic.y + 4} l12,-8 M${dumpX - 8},${pos.cubeDichroic.y + 16} l12,-8"/></g>`);
   beams.push(beam(`M${CX - 8},${STAGE_Y + 6} V${pos.cubeDichroic.y}`, 'sample', emTotal, { em: 'sample' }));
-  beams.push(beam(`M${CX - 8},${pos.cubeDichroic.y} V${pos.emitter.y}`, 'em:cubeDichroic', emTotal, { em: 'em:cubeDichroic' }));
+  beams.push(beam(`M${CX},${pos.cubeDichroic.y} V${pos.emitter.y}`, 'em:cubeDichroic', emTotal, { em: 'em:cubeDichroic' }));
   beams.push(beam(`M${pos.emitter.x},${pos.emitter.y} V${pos.gemini.y} H${pos.gemini.x}`, 'emitter', emTotal, { em: 'emitter' }));
   if (hasSplit || bypass === 'A') {
     beams.push(beam(`M${pos.gemini.x},${pos.gemini.y} H${pos.armA.x}`, 'gemini:A', emTotal, { em: 'gemini:A' }));
@@ -572,7 +584,7 @@ export function renderDiagram(el, ctx, handlers) {
       <text x="${CX}" y="${STAGE_Y - 96}" class="t-title t-sample" text-anchor="middle">${names.length ? esc(names.slice(0, 4).join(' · ')) + (names.length > 4 ? ` +${names.length - 4}` : '') : 'Sample — click to add fluorophores'}</text>
     </g>
     ${exPanel(L.EX.x, L.EX.y, L.EX.w, L.EX.h, { acq, store, doc, colors: ctx.fluorColors, exMin: ctx.exMin })}
-    ${leak && leak.frac * 100 >= ctx.leakThreshold && integrate(leak.arriving) > 0 ? leakPanel(leak, doc, store) : ''}
+    ${leak && leak.frac * 100 >= ctx.leakThreshold && integrate(leak.arriving) > 0 ? leakPanel(leak, effectiveCube(acqDoc, ctx.presets).dichroicId, store) : ''}
     ${fretControls(ctx)}
     <foreignObject x="${910 + L.s}" y="596" width="${Math.max(150, 175 + L.R - L.s)}" height="58" class="leak-ctl">
       <div xmlns="http://www.w3.org/1999/xhtml" class="leak-slider" title="Show the cube-dichroic WARNING when at least this much excitation passes through the dichroic">
@@ -606,7 +618,12 @@ export function renderDiagram(el, ctx, handlers) {
   const slider = el.querySelector('.leak-slider input');
   slider?.addEventListener('input', () => { el.querySelector('.leak-val').textContent = `${slider.value}%`; });
   slider?.addEventListener('change', () => handlers.onLeakThreshold(+slider.value));
-  el.querySelectorAll('.beam-hit').forEach((p) => {
+  el.querySelectorAll('.beam-hit[data-ex]').forEach((p) => {
+    p.addEventListener('mousemove', (e) => handlers.onExHover(p.dataset.ex, p.dataset.label, e));
+    p.addEventListener('mouseleave', () => handlers.onExHover(null));
+    p.addEventListener('click', (e) => { handlers.onExHover(p.dataset.ex, p.dataset.label, e); handlers.onBeamPin(); });
+  });
+  el.querySelectorAll('.beam-hit[data-em]').forEach((p) => {
     p.addEventListener('mousemove', (e) => handlers.onBeamHover(p.dataset.em, p.dataset.label, e));
     p.addEventListener('mouseleave', () => handlers.onBeamHover(null));
     p.addEventListener('click', (e) => { handlers.onBeamHover(p.dataset.em, p.dataset.label, e); handlers.onBeamPin(); });

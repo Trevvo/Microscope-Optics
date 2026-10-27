@@ -2,17 +2,21 @@
 // collects warnings about things the physics silently assumes.
 
 import { LAMBDA, N } from './physics/grid.js';
-import { referencedIds, fretOf } from './schema.js';
+import { referencedIds, fretOf, effectiveCube } from './schema.js';
 
-export function idsToLoad(doc, store) {
+export function idsToLoad(doc, store, presets = []) {
   const fl = doc.fluors.flatMap((f) => {
     const m = store.fluors.get(f.key);
     return m ? [m.ex, m.em] : [];
   });
-  return [...referencedIds(doc), ...fl];
+  const cubes = doc.acquisitions.flatMap((a) => { const c = effectiveCube(a, presets); return [c.exciterId, c.dichroicId, c.emitterId]; });
+  return [...referencedIds(doc), ...fl, ...cubes].filter((x) => x && typeof x === 'string');
 }
 
-export function resolve(doc, store) {
+/** Each acquisition's effective cube IDs (linked presets resolved). */
+export const acqCubes = (doc, presets = []) => doc.acquisitions.map((a) => effectiveCube(a, presets));
+
+export function resolve(doc, store, presets = []) {
   const g = (id) => store.get(id);
   const s = doc.splitter;
   const fluors = [];
@@ -38,7 +42,10 @@ export function resolve(doc, store) {
         armB: { filter: g(s.armB.filterId), camera: g(s.armB.cameraId) },
       },
       fluors,
-      acquisitions: doc.acquisitions,
+      acquisitions: doc.acquisitions.map((a) => {
+        const c = effectiveCube(a, presets);
+        return { ...a, cube: { exciter: g(c.exciterId), dichroic: g(c.dichroicId), emitter: g(c.emitterId) } };
+      }),
       fret: (() => {
         const f = fretOf(doc);
         const ok = f.on && f.donor && f.acceptor && f.donor !== f.acceptor
@@ -50,12 +57,16 @@ export function resolve(doc, store) {
   };
 }
 
-export function warnings(doc, store, result, skipped) {
+export function warnings(doc, store, result, skipped, presets = []) {
   const w = [];
+  const cubes = acqCubes(doc, presets);
+  const acqName = (ai) => doc.acquisitions[ai].name || `Acq ${ai + 1}`;
   for (const s of skipped) w.push({ level: 'warn', text: `${s.name} is excluded from readouts: ${s.reason}.` });
   const fr = fretOf(doc);
   if (fr.on && !result?.fret) w.push({ level: 'warn', text: 'FRET is on but not applied: choose a donor and a different acceptor, both enabled in the sample.' });
-  if (!doc.cube.dichroicId) w.push({ level: 'warn', text: 'No cube dichroic: the excitation light passes straight through the cube and never reaches the sample, so nothing is excited. Choose a cube dichroic.' });
+  cubes.forEach((c, ai) => {
+    if (!c.dichroicId) w.push({ level: 'warn', text: `${acqName(ai)}: no cube dichroic, so the excitation light passes straight through the cube and never reaches the sample. Choose a cube dichroic.` });
+  });
   if (!doc.splitter.dichroicId) w.push({ level: 'info', text: `No Gemini dichroic: all emission goes to Camera ${doc.splitter.bypassTo === 'A' ? 1 : 2} (bypass).` });
   doc.acquisitions.forEach((a, ai) => {
     if (!a.ledsOn.length) w.push({ level: 'warn', text: `${a.name || `Acq ${ai + 1}`} has no LEDs switched on.` });
@@ -70,8 +81,10 @@ export function warnings(doc, store, result, skipped) {
       .filter((m) => m && store.get(m.em))
       .map((m) => ({ name: m.name, em: store.get(m.em) }));
     const s = doc.splitter;
+    const cubeParts = cubes.flatMap((c, ai) => [[`${acqName(ai)} cube dichroic`, c.dichroicId], [`${acqName(ai)} cube emitter`, c.emitterId]]);
+    const seen = new Set();
     for (const [label, id] of [
-      ['Cube dichroic', doc.cube.dichroicId], ['Cube emitter', doc.cube.emitterId], ['Gemini dichroic', s.dichroicId],
+      ...cubeParts.filter(([, id]) => id && !seen.has(id) && seen.add(id)), ['Gemini dichroic', s.dichroicId],
       ['Arm 1 filter', s.armA.filterId], ['Arm 2 filter', s.armB.filterId], ['Camera 1', s.armA.cameraId], ['Camera 2', s.armB.cameraId],
     ]) {
       const c = id && store.components.get(id);
@@ -91,7 +104,8 @@ export function warnings(doc, store, result, skipped) {
       }
     }
     // Leakage is only meaningful once the blocking elements exist.
-    if (doc.cube.dichroicId || doc.cube.emitterId) result.acquisitions.forEach((a, ai) => {
+    result.acquisitions.forEach((a, ai) => {
+      if (!cubes[ai]?.dichroicId && !cubes[ai]?.emitterId) return;
       for (const [cam, lk] of Object.entries(a.leakage)) {
         if (lk.frac > 1e-4) {
           const p = lk.frac * 100;
